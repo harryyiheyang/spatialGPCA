@@ -1,0 +1,184 @@
+spatialGPCA
+================
+
+Spatial genetic principal components from location-aggregated genotypes.
+`spatialGPCA` fits a weighted spatial Gaussian process conditional on
+fixed effects and returns the spatial PC subspace. Genotypes are read
+from prepared PLINK BED files in SNP blocks using a C++ engine.
+
+## Installation
+
+``` r
+install.packages("remotes")
+remotes::install_github("harryyiheyang/spatialGPCA")
+library(spatialGPCA)
+```
+
+Source installation requires a C++17 compiler and R’s BLAS/LAPACK. On
+Windows, install the Rtools version appropriate for your R installation.
+
+## Inputs
+
+Use one individual table with **FID, IID, Lat, Lon in its first four
+columns**. Every remaining column is a numeric fixed effect, such as
+genetic PCs, an urban/rural indicator or income:
+
+``` r
+head(table)
+# FID IID Lat Lon GPC1 GPC2 urban income
+```
+
+The package matches FID + IID jointly, takes the intersection with FAM,
+and orders samples by FAM. Unique Lat/Lon pairs define locations. All
+fixed effects are averaged at locations, and an intercept is included
+automatically. No separate location table or count file is needed.
+Categorical covariates should be supplied as numeric indicator columns.
+
+Use an externally prepared, merged BED/BIM/FAM fileset containing
+high-quality diploid biallelic autosomal SNPs. A standard PLINK2
+frequency file can be generated outside R when needed:
+
+``` sh
+plink2 --bfile merged --freq --out merged
+```
+
+SNP frequencies are matched by ID and oriented to the BIM counted
+allele. Missing genotypes always receive the corresponding **2f** before
+location averaging, centering and scaling. Location weights use the
+complete matched sample counts.
+
+## Explore geography
+
+Supply **rho in kilometres**. Clustering is a separate step that can be
+inspected and rerun before model preparation:
+
+``` r
+cls <- svgpc_cluster(table, rho = rho, clusters = 1000, bed = "merged")
+plot(cls)
+
+cls$rho <- 150                  # Example scale; choose for your geography.
+plot(cls)
+```
+
+`clusters` is the initial centre count. Empty centres are removed.
+Classes containing at most floor(mean distinct-coordinate count / 2) are
+merged into the nearest current class, using a threshold fixed before
+merging. Every location remains assigned. Inspect
+`cls$locations$cluster`, `cls$centres` and `cls$clustering` for
+memberships, centres and class-count information.
+
+The map uses a density background and solid red cluster centres. A
+circle of radius rho is drawn around the centre with the highest
+displayed density. The companion curve shows the base kernel
+exp(-distance/rho), with distance in kilometres. Both use the same
+projected geographic coordinates.
+
+<figure>
+<img src="inst/doc/us_clusters.png"
+alt="Geographic clusters in the US simulation" />
+<figcaption aria-hidden="true">Geographic clusters in the US
+simulation</figcaption>
+</figure>
+
+## Fit spatial PCs
+
+Choose **one** selection method, `"REML"` or `"GCV"`. Lambda is the
+smoothing penalty sigma_e^2 / sigma_gp^2, estimated from the genotype
+statistics. It is distinct from the supplied geographic scale rho.
+
+``` r
+model <- svgpc_prepare(cls)
+svgpc_accumulate(model, "merged.afreq")
+parameters <- svgpc_select_lambda(model, method = "REML")
+parameters
+
+result <- svgpc_fit(model, parameters = parameters, components = 10)
+PC <- result$outputs$raw_F_PCA$pcs
+locations <- result$spatial$locations
+```
+
+The fit reuses the selected parameters. PC rows correspond to
+`locations`. The default output contains orthonormal raw-location PC
+vectors. BED processing uses 256-SNP blocks by default, without
+retaining the full genotype matrix. The matrix decompositions depend on
+spatial rank, not the number of SNPs.
+
+``` r
+result$rho <- 200
+plot(result)
+```
+
+Editing `result$rho` updates the displayed circle and correlation curve.
+It does not silently refit the PCs; the fitted scale remains in
+`result$spatial$rho`. To fit another scale, update `cls$rho` and repeat
+preparation, accumulation and selection.
+
+For selected SNPs, fitted geographic effects can be obtained from their
+standardized location means using the same parameter result:
+
+``` r
+Fhat <- svgpc_fitted(model, Y, parameters)
+```
+
+Here `Y` is a location-by-SNP matrix after the same 2f imputation,
+location averaging, centering and HWE scaling. `Fhat` contains
+geographic contributions, excluding the fixed-effect component.
+
+## US simulation
+
+The [complete R Markdown example](inst/examples/us_full_fit.Rmd)
+simulates **150,000 SNPs at 3,000 distinct US locations**, with 8,953
+individuals sharing these coordinates. The 1,000 initial clusters become
+864 centres. It runs the full BED workflow, obtains spatial PCs and
+compares fitted SNP geographic effects with their simulated values.
+
+These are synthetic coordinates and genotypes, not real genetic records.
+The first three fitted PCs have canonical correlations 0.984, 0.972 and
+0.931 with the three planted spatial fields, allowing for PC signs and
+rotations.
+
+<figure>
+<img src="inst/doc/spatial_pcs.png" alt="Fitted spatial PCs" />
+<figcaption aria-hidden="true">Fitted spatial PCs</figcaption>
+</figure>
+
+The first four SNPs are selected before fitting. Their known and fitted
+geographic effects share a colour scale, so smoothing-induced amplitude
+shrinkage remains visible.
+
+<figure>
+<img src="inst/doc/geographic_effects.png"
+alt="Known and fitted SNP geographic effects" />
+<figcaption aria-hidden="true">Known and fitted SNP geographic
+effects</figcaption>
+</figure>
+
+To compile the complete example from a source checkout, install `knitr`
+and `rmarkdown`, make Pandoc available (RStudio supplies it), and run:
+
+``` sh
+Rscript tools/build_rmd.R inst/examples/us_full_fit.Rmd inst/doc
+```
+
+The example generates BED and PLINK2-format frequency files itself. For
+real analyses, use the existing BED and frequency files instead of
+simulating data. The default `Rscript tools/build_rmd.R` compiles this
+README.
+
+## Saving results and further documentation
+
+``` r
+saveRDS(result, "spatial_result.rds")
+svgpc_save(model, "spatial_model.rds")
+model <- svgpc_load("spatial_model.rds")
+```
+
+Use `svgpc_info(model)` for dimensions, input provenance and computation
+times. [Workflow details](inst/doc/WORKFLOW.md) describe matching,
+aggregation and geographic projection. [Mathematical
+definitions](inst/doc/MATHEMATICS.md) give the weighted model,
+fixed-effect constraint, REML/GCV and PCA equations.
+
+## Author and license
+
+Yihe Yang. Licensed under [GPL-3](inst/COPYING).

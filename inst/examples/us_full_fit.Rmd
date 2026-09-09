@@ -1,0 +1,266 @@
+---
+title: "spatialGPCA: 150,000 SNPs at 3,000 US locations"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    self_contained: true
+    mathjax: null
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error = FALSE, collapse = TRUE,
+                      comment = "#>", fig.width = 12, fig.height = 6,
+                      dpi = 150, out.width = "100%")
+library(spatialGPCA)
+library(ggplot2)
+output <- Sys.getenv("SPATIALGPCA_FULL_OUTPUT",
+                     unset = file.path(tempdir(), "spatialGPCA_full_fit"))
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+mm <- if (requireNamespace("CppMatrix", quietly = TRUE)) CppMatrix::matrixMultiply else `%*%`
+```
+
+This is a complete **synthetic BED fit**, including smoothing-parameter selection,
+spatial PCs and SNP-specific fitted geographic effects. All 150,000 SNPs enter
+the fit. There are 3,000 distinct Lat/Lon locations and initially 1,000 geographic
+clusters; locations and cluster centres are different counts. Multiple individuals
+share each location. These are simulated US coordinates and genotypes, not real
+genetic records.
+
+The simulation plants three smooth spatial fields and independent binomial
+genotype draws conditional on the fields and fixed effects. This is a recovery
+demonstration using the package's Gaussian working model for standardized means.
+
+## Individual table and known geographic signal
+
+Every column after FID, IID, Lat, Lon is a location-level fixed effect, repeated
+for individuals at that location. Location counts are derived by the package.
+
+```{r simulate-locations}
+set.seed(1909)
+nloc <- 3000L
+p <- 150000L
+lon <- runif(30000, -124, -67)
+lat <- runif(30000, 25, 49)
+inside <- !is.na(maps::map.where("state", lon, lat))
+ll <- data.frame(Lat = lat[inside][seq_len(nloc)], Lon = lon[inside][seq_len(nloc)])
+Ni <- sample(2:4, nloc, replace = TRUE)
+loc <- rep(seq_len(nloc), Ni)
+n <- length(loc)
+C <- data.frame(GPC1 = rnorm(nloc), GPC2 = rnorm(nloc),
+                urban = as.numeric(ll$Lat > 38), income = rnorm(nloc, 50000, 12000))
+table <- data.frame(FID = sprintf("F%06d", seq_len(n)),
+                    IID = sprintf("I%06d", seq_len(n)),
+                    Lat = ll$Lat[loc], Lon = ll$Lon[loc], C[loc, ])
+rownames(table) <- NULL
+X <- cbind(1, as.matrix(C))
+qX <- qr(X * sqrt(Ni))
+H <- cbind(sin((ll$Lon + 100) / 8), cos((ll$Lat - 36) / 4),
+           exp(-((ll$Lon + 85) / 9)^2 - ((ll$Lat - 34) / 6)^2))
+H <- qr.resid(qX, H * sqrt(Ni)) / sqrt(Ni)
+H <- sweep(H, 2, apply(abs(H), 2, max), "/")
+Z <- scale(as.matrix(C))
+Z <- sweep(Z, 2, apply(abs(Z), 2, max), "/")
+head(table)
+```
+
+The regression residual above defines the **simulation truth** so that its
+spatial fields are weighted-orthogonal to the intercept and all fixed effects.
+It does not replace the package's spatial-basis QR calculation.
+
+## Generate BED and allele frequencies in blocks
+
+No full individual-by-SNP or location-by-SNP matrix is created. SNPs have
+independent random loadings on the three spatial fields, small fixed effects,
+and 1.5% missing genotype calls. Bounds on these loadings keep all simulated
+allele probabilities strictly between zero and one, without clipping.
+
+```{r simulate-bed}
+prefix <- file.path(output, "us_genotypes")
+fam <- data.frame(table[, 1:2], father = 0, mother = 0, sex = 0, phenotype = -9)
+bim <- data.frame(CHROM = 1, ID = paste0("rs", seq_len(p)),
+                  CM = 0, POS = seq_len(p), A1 = "A", A2 = "C")
+write.table(fam, paste0(prefix, ".fam"), row.names = FALSE, col.names = FALSE, quote = FALSE)
+write.table(bim, paste0(prefix, ".bim"), row.names = FALSE, col.names = FALSE, quote = FALSE)
+af <- obs <- numeric(p)
+missing_calls <- 0
+Y4 <- truth4 <- matrix(0, nloc, 4)
+con <- file(paste0(prefix, ".bed"), "wb")
+writeBin(as.raw(c(0x6c, 0x1b, 1)), con)
+    for (start in seq(1L, p, by = 256L)) {
+        j <- start:min(p, start + 255L)
+        f <- runif(length(j), .25, .45)
+        b <- matrix(runif(3 * length(j), -.04, .04), 3)
+        a <- matrix(runif(4 * length(j), -.005, .005), 4)
+        S <- mm(H, b)
+        prob <- sweep(S + mm(Z, a), 2, f, "+")
+        G <- matrix(rbinom(n * length(j), 2, prob[loc, ]), n)
+        G[runif(length(G)) < .015] <- NA
+        obs[j] <- 2 * colSums(!is.na(G))
+        af[j] <- colSums(G, na.rm = TRUE) / obs[j]
+        missing_calls <- missing_calls + sum(is.na(G))
+        if (start == 1L) {
+            for (k in 1:4) {
+                g <- G[, k]
+                g[is.na(g)] <- 2 * af[k]
+                Y4[, k] <- (rowsum(g, loc)[, 1] / Ni - 2 * af[k]) /
+                            sqrt(2 * af[k] * (1 - af[k]))
+                truth4[, k] <- 2 * S[, k] / sqrt(2 * af[k] * (1 - af[k]))
+            }
+        }
+        for (k in seq_along(j)) {
+            codes <- c(3L, 2L, 0L)[G[, k] + 1L]
+            codes[is.na(codes)] <- 1L
+            length(codes) <- ceiling(n / 4) * 4
+            codes[is.na(codes)] <- 0L
+            writeBin(as.raw(colSums(matrix(codes, 4) * c(1L, 4L, 16L, 64L))), con)
+        }
+    }
+close(con)
+ff <- data.frame(CHROM = 1, ID = bim$ID, REF = "C", ALT = "A", ALT_FREQS = af,
+                 OBS_CT = obs, check.names = FALSE)
+names(ff)[1] <- "#CHROM"
+write.table(ff, paste0(prefix, ".afreq"), row.names = FALSE, quote = FALSE, sep = "\t")
+data.frame(individuals = n, locations = nloc, SNPs = p, missing_calls = missing_calls,
+           BED_MiB = file.info(paste0(prefix, ".bed"))$size / 2^20)
+```
+
+G counts BIM allele A1 = A. The `.afreq` has ALT = A, REF = C and the observed
+frequency of A, with ordinary PLINK2 column names. This simulation writes that
+file itself; it does not claim to execute PLINK2. For real data, use the existing
+BED and `plink2 --bfile merged --freq --out merged` output directly.
+
+## Clustering and rho
+
+We shuffle the individual table to exercise reordering by FAM. The geographic
+preparation and clustering use only matched table records. Empty and small
+classes are merged using the distinct-coordinate count rule.
+
+```{r clustering}
+table <- table[sample(nrow(table)), ]
+cls <- svgpc_cluster(table, rho = 300, clusters = 1000, bed = prefix)
+xy <- as.matrix(cls$centres[, c("x", "y")])
+m <- nrow(xy)
+d6 <- numeric(m)
+for (i in seq_len(m)) {
+    d <- sqrt((xy[, 1] - xy[i, 1])^2 + (xy[, 2] - xy[i, 2])^2)
+    d[i] <- Inf
+    d6[i] <- sort(d, partial = 6L)[6L]
+}
+cls$rho <- median(d6)
+cls
+plot(cls)
+```
+
+Rho is the median sixth-nearest-centre distance for this example: an explicit
+approximate geographic range, not lambda and not a hard cutoff. The black circle
+and decay plot use this same rho. The model uses projected kilometre distances.
+
+## Fit every SNP and obtain spatial PCs
+
+```{r fit}
+model <- svgpc_prepare(cls)
+svgpc_accumulate(model, paste0(prefix, ".afreq"))
+method <- "REML"             # Use "GCV" here to fit only GCV instead.
+parameters <- svgpc_select_lambda(model, method)
+result <- svgpc_fit(model, parameters = parameters, components = 10)
+PC <- result$outputs$raw_F_PCA$pcs
+info <- svgpc_info(model)
+result
+```
+
+This fits one genotype-based lambda and reuses it for PCA. No 150,000 by 150,000
+matrix is formed. BED accumulation uses the default 256-SNP blocks, with 2f
+imputation, location averaging, centering, scaling and sample-count weights.
+
+## Geographic distribution of the fitted PCs
+
+These are **fitted PC scores at each of the 3,000 locations**, not cluster labels.
+PC signs are arbitrary. Each panel has its own symmetric colour scale after
+division by its maximum absolute score; the saved PC matrix is unchanged.
+
+```{r pc-map, fig.height=8}
+outline <- ggplot2::map_data("state")
+Pdat <- data.frame(Lon = rep(ll$Lon, 4), Lat = rep(ll$Lat, 4),
+                   PC = rep(paste0("Spatial PC ", 1:4), each = nloc),
+                   score = as.vector(sweep(PC[, 1:4], 2, apply(abs(PC[, 1:4]), 2, max), "/")))
+Ppc <- ggplot() +
+    geom_polygon(data = outline, aes(long, lat, group = group),
+                 fill = "#F1F3F5", colour = "#B3BDC5", linewidth = .15) +
+    geom_point(data = Pdat, aes(Lon, Lat, colour = score), size = .55, stroke = 0) +
+    scale_colour_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
+                           limits = c(-1, 1), name = "Relative score") +
+    facet_wrap(~PC, ncol = 2) + coord_quickmap(xlim = c(-125, -66), ylim = c(24, 50)) +
+    labs(title = "Fitted spatial PCs: 150,000 SNPs, 3,000 locations", x = NULL, y = NULL) +
+    theme_minimal(base_size = 11) + theme(panel.grid = element_blank(), legend.position = "bottom")
+Ppc
+ggsave(file.path(output, "spatial_pcs.png"), Ppc, width = 12, height = 8, dpi = 160)
+```
+
+## Recovery of the planted spatial subspace
+
+We compare the span of the three planted fields with the first three fitted
+PCs using canonical correlations. This comparison allows arbitrary signs and
+rotations; it does not require PC 1 to be the first simulated field.
+
+```{r recovery}
+Q <- qr.Q(qr(H))
+cs <- svd(crossprod(Q, PC[, 1:3]), nu = 0, nv = 0)$d
+recovery <- data.frame(direction = 1:3, canonical_correlation = cs,
+                       angle_degrees = acos(pmin(1, cs)) * 180 / pi)
+recovery
+```
+
+## SNP-specific geographic effects
+
+The first four SNPs were selected before fitting. `svgpc_fitted()` takes their
+standardized location means and the already selected parameters to obtain
+posterior fitted geographic effects; it does not fit another lambda. Fixed
+effects are excluded from the returned geographic component.
+
+```{r geographic-effects}
+Fhat <- svgpc_fitted(model, Y4, parameters)
+effects <- data.frame(SNP = paste0("rs", 1:4),
+                      correlation = diag(cor(truth4, Fhat)),
+                      RMSE = sqrt(colMeans((truth4 - Fhat)^2)))
+effects
+```
+
+The truth here is the planted geographic contribution in standardized genotype
+units before missing-call imputation. With finite individual counts and missing
+calls, a fitted field need not equal its truth. Both rows below use the same
+colour scale, so amplitude shrinkage remains visible.
+
+```{r effect-map, fig.height=7}
+Edat <- data.frame(Lon = rep(ll$Lon, 8), Lat = rep(ll$Lat, 8),
+                   SNP = rep(rep(paste0("rs", 1:4), each = nloc), 2),
+                   source = factor(rep(c("Simulated geographic effect", "Fitted geographic effect"),
+                                       each = nloc * 4),
+                                   levels = c("Simulated geographic effect", "Fitted geographic effect")),
+                   effect = c(as.vector(truth4), as.vector(Fhat)))
+lim <- max(abs(Edat$effect))
+Pe <- ggplot() +
+    geom_polygon(data = outline, aes(long, lat, group = group),
+                 fill = "#F1F3F5", colour = "#B3BDC5", linewidth = .15) +
+    geom_point(data = Edat, aes(Lon, Lat, colour = effect), size = .4, stroke = 0) +
+    scale_colour_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
+                           limits = c(-lim, lim), name = "Standardized effect") +
+    facet_grid(source ~ SNP) + coord_quickmap(xlim = c(-125, -66), ylim = c(24, 50)) +
+    labs(title = "Known and fitted SNP geographic effects", x = NULL, y = NULL) +
+    theme_minimal(base_size = 10) + theme(panel.grid = element_blank(), legend.position = "bottom")
+Pe
+ggsave(file.path(output, "geographic_effects.png"), Pe, width = 13, height = 7, dpi = 160)
+```
+
+## Save the fitted results
+
+```{r save}
+saveRDS(result, file.path(output, "result.rds"))
+write.table(cbind(result$spatial$locations[, c("Lat", "Lon", "count")], PC),
+            file.path(output, "spatial_pcs.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+The result contains the spatial PC subspace and its location metadata.
+`Fhat` contains the four SNP-specific geographic effects. The simulation data
+and output files are written under `SPATIALGPCA_FULL_OUTPUT` when that
+environment variable is set, otherwise under the R temporary directory.

@@ -1,0 +1,24 @@
+Package: spatialGPCA
+Type: Package
+Title: Spatial Genetic Principal Components from Location-Aggregated Genotypes
+Version: 0.3.0
+Authors@R: person("Yihe", "Yang", role = c("aut", "cre"),
+    email = "yxy1234@case.edu", comment = c(ORCID = "0000-0001-6563-3579"))
+Description: Fits a weighted local Gaussian process conditional on location-level
+    fixed effects, using a native C++ engine with prior whitening,
+    full-variant shared smoothing-parameter selection and dynamic spatial PCA.
+    Prepared PLINK BED inputs are decoded directly in C++ and accumulated
+    by location without retaining a complete genotype matrix. An individual
+    table supplies identifiers, geographic coordinates and all fixed effects.
+    Independent geographic clustering and editable spatial-scale plots precede
+    genotype-based REML or GCV smoothing selection.
+License: GPL-3
+Encoding: UTF-8
+Depends: R (>= 4.0.0)
+Imports: Rcpp, ggplot2, maps, grid
+LinkingTo: Rcpp, RcppArmadillo
+Suggests: knitr, rmarkdown
+SystemRequirements: C++17, BLAS, LAPACK
+NeedsCompilation: yes
+URL: https://github.com/harryyiheyang/spatialGPCA
+BugReports: https://github.com/harryyiheyang/spatialGPCA/issues
