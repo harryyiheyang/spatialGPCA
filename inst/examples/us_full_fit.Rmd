@@ -1,5 +1,5 @@
 ---
-title: "spatialGPCA: 150,000 SNPs at 3,000 US locations"
+title: "spatialGPCA: SPDE at 3,000 US locations"
 output:
   html_document:
     toc: true
@@ -20,10 +20,10 @@ dir.create(output, recursive = TRUE, showWarnings = FALSE)
 mm <- if (requireNamespace("CppMatrix", quietly = TRUE)) CppMatrix::matrixMultiply else `%*%`
 ```
 
-This is a complete **synthetic BED fit**, including smoothing-parameter selection,
+This is a complete **synthetic SPDE BED fit**, including smoothing-parameter selection,
 spatial PCs and SNP-specific fitted geographic effects. All 150,000 SNPs enter
-the fit. There are 3,000 distinct Lat/Lon locations and initially 1,000 geographic
-clusters; locations and cluster centres are different counts. Multiple individuals
+the fit. There are 3,000 distinct Lat/Lon locations. An independent RTriangle mesh
+is constructed entirely through the package's public functions. Multiple individuals
 share each location. These are simulated US coordinates and genotypes, not real
 genetic records.
 
@@ -130,46 +130,44 @@ frequency of A, with ordinary PLINK2 column names. This simulation writes that
 file itself; it does not claim to execute PLINK2. For real data, use the existing
 BED and `plink2 --bfile merged --freq --out merged` output directly.
 
-## Clustering and rho
+## Construct and inspect the SPDE mesh
 
-We shuffle the individual table to exercise reordering by FAM. The geographic
-preparation and clustering use only matched table records. Empty and small
-classes are merged using the distinct-coordinate count rule.
+We shuffle the table to exercise FAM matching during fitting. Mesh construction
+uses the geographic table and does not require BED or GP clustering.
 
-```{r clustering}
+```{r mesh}
 table <- table[sample(nrow(table)), ]
-cls <- svgpc_cluster(table, rho = 300, clusters = 1000, bed = prefix)
-xy <- as.matrix(cls$centres[, c("x", "y")])
-m <- nrow(xy)
-d6 <- numeric(m)
-for (i in seq_len(m)) {
-    d <- sqrt((xy[, 1] - xy[i, 1])^2 + (xy[, 2] - xy[i, 2])^2)
-    d[i] <- Inf
-    d6[i] <- sort(d, partial = 6L)[6L]
-}
-cls$rho <- median(d6)
-cls
-plot(cls)
+locations <- svgpc_spde_locations(table)
+mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = 150)
+mesh
+png(file.path(output, "us_mesh.png"), width = 1600, height = 900, res = 160)
+plot(mesh)
+points(locations$locations[, c("x", "y")], pch = 16, cex = .25, col = "#C76A36")
+invisible(dev.off())
+knitr::include_graphics(file.path(output, "us_mesh.png"))
 ```
 
-Rho is the median sixth-nearest-centre distance for this example: an explicit
-approximate geographic range, not lambda and not a hard cutoff. The black circle
-and decay plot use this same rho. The model uses projected kilometre distances.
+Orange points are the observation locations; mesh vertices are the SPDE knots.
+The maximum triangle area is 8,000 km² and the rectangular boundary extends
+150 km beyond the study bounds. The mesh is not clipped to coastlines.
+These are illustrative choices; check mesh resolution and buffer for your study.
 
 ## Fit every SNP and obtain spatial PCs
 
 ```{r fit}
-model <- svgpc_prepare(cls)
-svgpc_accumulate(model, paste0(prefix, ".afreq"))
-method <- "REML"             # Use "GCV" here to fit only GCV instead.
-parameters <- svgpc_select_lambda(model, method)
-result <- svgpc_fit(model, parameters = parameters, components = 10)
+scale <- svgpc_spde_scale(distance = 150)
+model <- svgpc_spde_prepare_data(mesh, table, kappa = scale$kappa, bed = prefix)
+model <- svgpc_spde_accumulate(model, paste0(prefix, ".afreq"))
+parameters <- svgpc_spde_select_lambda(model, method = "REML")
+result <- svgpc_spde_fit(model, parameters = parameters, components = 10)
 PC <- result$outputs$raw_F_PCA$pcs
-info <- svgpc_info(model)
-result
+locations <- model$spatial$locations
+parameters
 ```
 
-This fits one genotype-based lambda and reuses it for PCA. No 150,000 by 150,000
+The scale sets nominal Matérn correlation exp(-1) at 150 km, independently of
+mesh resolution. One genotype-based lambda is estimated and reused for PCA.
+No 150,000 by 150,000
 matrix is formed. BED accumulation uses the default 256-SNP blocks, with 2f
 imputation, location averaging, centering, scaling and sample-count weights.
 
@@ -181,7 +179,7 @@ division by its maximum absolute score; the saved PC matrix is unchanged.
 
 ```{r pc-map, fig.height=8}
 outline <- ggplot2::map_data("state")
-Pdat <- data.frame(Lon = rep(ll$Lon, 4), Lat = rep(ll$Lat, 4),
+Pdat <- data.frame(Lon = rep(locations$Lon, 4), Lat = rep(locations$Lat, 4),
                    PC = rep(paste0("Spatial PC ", 1:4), each = nloc),
                    score = as.vector(sweep(PC[, 1:4], 2, apply(abs(PC[, 1:4]), 2, max), "/")))
 Ppc <- ggplot() +
@@ -191,7 +189,7 @@ Ppc <- ggplot() +
     scale_colour_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
                            limits = c(-1, 1), name = "Relative score") +
     facet_wrap(~PC, ncol = 2) + coord_quickmap(xlim = c(-125, -66), ylim = c(24, 50)) +
-    labs(title = "Fitted spatial PCs: 150,000 SNPs, 3,000 locations", x = NULL, y = NULL) +
+    labs(title = "SPDE spatial PCs: 150,000 SNPs, 3,000 locations", x = NULL, y = NULL) +
     theme_minimal(base_size = 11) + theme(panel.grid = element_blank(), legend.position = "bottom")
 Ppc
 ggsave(file.path(output, "spatial_pcs.png"), Ppc, width = 12, height = 8, dpi = 160)
@@ -213,13 +211,13 @@ recovery
 
 ## SNP-specific geographic effects
 
-The first four SNPs were selected before fitting. `svgpc_fitted()` takes their
-standardized location means and the already selected parameters to obtain
+The first four SNPs were selected before fitting. `svgpc_spde_fitted()` takes their
+standardized location means and the already selected lambda to obtain
 posterior fitted geographic effects; it does not fit another lambda. Fixed
 effects are excluded from the returned geographic component.
 
 ```{r geographic-effects}
-Fhat <- svgpc_fitted(model, Y4, parameters)
+Fhat <- svgpc_spde_fitted(model, Y4, lambda = parameters$lambda)
 effects <- data.frame(SNP = paste0("rs", 1:4),
                       correlation = diag(cor(truth4, Fhat)),
                       RMSE = sqrt(colMeans((truth4 - Fhat)^2)))
@@ -255,8 +253,8 @@ ggsave(file.path(output, "geographic_effects.png"), Pe, width = 13, height = 7, 
 ## Save the fitted results
 
 ```{r save}
-saveRDS(result, file.path(output, "result.rds"))
-write.table(cbind(result$spatial$locations[, c("Lat", "Lon", "count")], PC),
+saveRDS(list(result = result, locations = locations), file.path(output, "result.rds"))
+write.table(cbind(locations[, c("Lat", "Lon", "count")], PC),
             file.path(output, "spatial_pcs.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 ```
 

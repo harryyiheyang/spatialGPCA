@@ -1,4 +1,6 @@
-# QR-reduced spatial genetic PCA
+# GP: QR-reduced spatial genetic PCA
+
+For the finite-element SPDE model, see [SPDE.md](SPDE.md).
 
 Notation: n locations, p SNPs, m knots, W=diag(N_i), C=[1, X] with all
 post-coordinate table columns averaged within matched locations. Let

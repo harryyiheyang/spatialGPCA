@@ -1,4 +1,6 @@
-# spatialGPCA: one-table BED workflow
+# GP: one-table BED workflow
+
+For the recommended SPDE workflow, see the package README and [SPDE.md](SPDE.md).
 
 The first four columns of the individual table are **FID, IID, Lat, Lon**.
 All remaining columns are numeric fixed effects, exactly

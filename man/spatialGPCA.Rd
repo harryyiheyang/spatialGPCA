@@ -20,7 +20,7 @@
 \description{Explore independent geographic clustering, then use prepared BED genotypes to select one smoothing penalty and obtain the spatial PC subspace.}
 \usage{
 svgpc_cluster(table, rho, clusters = NULL, bed = NULL, seed = 44L)
-svgpc_prepare(spatial)
+svgpc_prepare(spatial, table = NULL, bed = NULL)
 svgpc_accumulate(model, frequencies, block_size = 256L)
 svgpc_accumulate_matrix(model, G, block_size = 256L)
 svgpc_select_lambda(model, method = c("REML", "GCV"))
@@ -38,12 +38,12 @@ svgpc_load(file)
 \method{print}{svgpc_parameters}(x, ...)
 }
 \arguments{
-\item{table}{Individual data frame. First four columns are FID, IID, Lat and Lon, in that order. Every remaining column is a numeric fixed effect.}
+\item{table}{Individual data frame. First four columns are FID, IID, Lat and Lon, in that order. Every remaining column is a numeric fixed effect. In svgpc_prepare, an optional replacement table supplies the individuals, coordinates and covariates for fitting; NULL retains the geographic object's table.}
 \item{rho}{Positive base-kernel distance scale in km; supplied before genotype fitting.}
 \item{clusters}{Initial number of geographic clusters; NULL uses min(50, number of distinct locations). Empty centres are removed during iteration, so the returned count may be smaller. All individuals remain assigned. After empty-centre removal, the threshold is floor(mean distinct-coordinate count per class / 2). Classes at or below that coordinate-count threshold are merged into the nearest current class. Multiple individuals sharing one Lat/Lon pair count as one coordinate for this rule. The threshold is held fixed during merging; centres use the existing distinct-location mean convention.}
-\item{bed}{Prepared BED/BIM/FAM prefix. If supplied, use the FID/IID intersection in FAM order before clustering. Omit for geography-only exploration.}
+\item{bed}{Prepared BED/BIM/FAM prefix. In svgpc_cluster, use the FID/IID intersection in FAM order before clustering; omit for geography-only exploration. In svgpc_prepare, an explicit prefix matches the fitting table to FAM order while retaining the original cluster centres and projection origin. NULL retains any prefix already in spatial.}
 \item{seed}{Seed for native geographic clustering.}
-\item{spatial}{Result from svgpc_cluster, possibly after editing its rho.}
+\item{spatial}{Result from svgpc_cluster, possibly after editing its rho. Its centres remain the GP knots when table or bed is supplied at preparation.}
 \item{model}{Prepared native context.}
 \item{frequencies}{PLINK2 .afreq filename or frequency data frame. ID/REF/ALT/ALT_FREQS and allele-labelled ID/A1/A2/AF or SNP/A1/A2/MAF tables are accepted.}
 \item{block_size}{Number of SNPs per native block.}
@@ -60,6 +60,8 @@ svgpc_load(file)
 }
 \value{Clustering returns actual location membership, centres, matched individuals, counts, rho and projection metadata. Preparation returns a native context; accumulation invisibly returns it. Selection returns lambda and criterion diagnostics. Fit returns the requested spatial PC outputs and geographic metadata. Plot draws the map and base-kernel correlation curve and invisibly returns the two ggplot objects.}
 \details{The fixed-effect matrix is exactly the columns after the first four; location means use matched individuals, and an intercept is always added. A full QR constructs the coefficient-space null basis N satisfying C'WBN=0, reducing the geographic basis dimension; it is not columnwise residualization of B. The coefficient prior precision is N'QN; the default PCA uses the raw-location metric. Missing BED genotypes are always filled with the counted-allele 2f before aggregation and HWE scaling. Location weights include all matched individuals. There is no PGEN, dosage, missingness or no-intercept switch.
+
+For a three-stage workflow, first construct and inspect geographic clusters without BED. Then call \code{svgpc_prepare(cls, table = fitting_table, bed = prefix)}, accumulate the SNPs, and select parameters with \code{svgpc_select_lambda}. Preparation matches FID/IID, rebuilds exact-coordinate location groups, counts and covariate means from the matched fitting table, and projects coordinates using the original projection origin. It does not recluster or move the original centres. Locations already present in cls retain their original cluster membership; newly supplied coordinates are assigned to the nearest fixed centre for geographic metadata. The original cls object remains unchanged. Finally, repeated \code{svgpc_fit(model, parameters = parameters, components = ...)} calls reuse the selected lambda and accumulated statistics to extract different numbers of PCs without reading BED again. Calling \code{svgpc_prepare(cls)} with both optional inputs NULL retains the existing preparation path.
 
 Lat/Lon are transformed automatically to a regional spherical azimuthal-equidistant projection in km. Kernel distances are Euclidean within this projection. The map background shows relative individual density from smoothed location counts on a fixed display grid, not density per square kilometre. Red dots mark every cluster centre, with smaller symbols when there are more centres. A circle with projected radius rho is centred on the cluster centre with the highest displayed individual density. The map expands to include this circle. Display smoothing is independent of rho and clustering. plot reads the current rho each time; changing a fitted result's rho updates its curve without silently refitting the PCs. A new preparation and accumulation is required for a different fitted rho. The curve is the base kernel, not the fixed-effect-constrained GP covariance.}
 \section{Computation timings}{After preparation, \code{svgpc_info(model)$seconds} contains wall-clock seconds for the completed native operations. Names beginning with \code{prepare_detail.} distinguish kernel construction, the fixed-effect QR, the constraint crossproduct and full QR, basis/prior transformations, Gram formation, Cholesky factorizations, triangular solves, symmetric eigendecomposition, design construction and the raw-location metric. The numbered detail entries follow execution order. Aggregate stage timings overlap these details; do not sum aggregate and detail entries together. Timings are available after preparation returns and are not live progress messages.}

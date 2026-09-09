@@ -41,3 +41,19 @@ cpp_prepare <- function(xy, pcs, counts, knots, rho) {
     .Call(`_spatialGPCA_cpp_prepare`, xy, pcs, counts, knots, rho)
 }
 
+cpp_spde_project <- function(xy, tv, loc) {
+    .Call(`_spatialGPCA_cpp_spde_project`, xy, tv, loc)
+}
+
+cpp_spde_accumulate_matrix <- function(B, Xq, counts, G, block_size, projection) {
+    .Call(`_spatialGPCA_cpp_spde_accumulate_matrix`, B, Xq, counts, G, block_size, projection)
+}
+
+cpp_spde_accumulate_reader <- function(B, Xq, counts, reader, p, block_size, projection) {
+    .Call(`_spatialGPCA_cpp_spde_accumulate_reader`, B, Xq, counts, reader, p, block_size, projection)
+}
+
+cpp_spde_accumulate_bed <- function(B, Xq, counts, path, locations, af, block_size, projection) {
+    .Call(`_spatialGPCA_cpp_spde_accumulate_bed`, B, Xq, counts, path, locations, af, block_size, projection)
+}
+

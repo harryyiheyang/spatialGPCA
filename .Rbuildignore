@@ -1,3 +1,8 @@
 ^README\.html$
+^README_files$
+^inst/doc/us_full_fit\.html$
+^inst/doc/us_full_fit_summary\.tsv$
+^inst/doc/VALIDATION\.md$
+^inst/examples/us_smoke\.R$
 ^.*\.Rproj$
 ^\.Rproj\.user$

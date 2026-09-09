@@ -29,10 +29,32 @@
     out
 }
 
-svgpc_prepare <- function(spatial) {
+svgpc_prepare <- function(spatial, table = NULL, bed = NULL) {
     if (!inherits(spatial, "svgpc_cluster")) stop("Use a geographic result from svgpc_cluster()")
     if (length(spatial$rho) != 1L || !is.finite(spatial$rho) || spatial$rho <= 0)
         stop("rho must be a positive distance in km")
+    if (!is.null(table) || !is.null(bed)) {
+        if (is.null(table)) table <- spatial$table
+        if (is.null(bed)) bed <- spatial$bed
+        dat <- .individuals(table, bed)
+        table <- dat$table
+        key <- paste(sprintf("%.17g", table$Lat), sprintf("%.17g", table$Lon), sep = "\t")
+        loc <- match(key, unique(key))
+        ll <- table[!duplicated(key), c("Lat", "Lon"), drop = FALSE]
+        xy <- .geo_forward(ll$Lat, ll$Lon, spatial$projection$origin)
+        old_key <- paste(sprintf("%.17g", spatial$locations$Lat),
+                         sprintf("%.17g", spatial$locations$Lon), sep = "\t")
+        old <- match(unique(key), old_key)
+        cluster <- spatial$locations$cluster[old]
+        for (i in which(is.na(old))) {
+            d <- (spatial$centres$x - xy[i, 1L])^2 + (spatial$centres$y - xy[i, 2L])^2
+            cluster[i] <- which.min(d)
+        }
+        spatial[names(dat)] <- dat
+        spatial$locations <- data.frame(ll, xy, count = tabulate(loc, nrow(ll)), cluster = cluster)
+        rownames(spatial$locations) <- as.character(seq_len(nrow(ll)))
+        spatial$sample_location <- loc
+    }
     X <- as.matrix(spatial$table[, -c(1:4), drop = FALSE])
     n <- nrow(spatial$locations)
     C <- if (ncol(X)) rowsum(X, spatial$sample_location, reorder = TRUE) /
@@ -86,7 +108,7 @@ svgpc_accumulate <- function(model, frequencies, block_size = 256L) {
     .model(model)
     spatial <- attr(model, "spatial")
     prefix <- spatial$bed
-    if (is.null(prefix)) stop("Provide bed to svgpc_cluster(table, rho, bed = ...) before BED fitting")
+    if (is.null(prefix)) stop("Provide bed to svgpc_prepare(spatial, bed = ...) or svgpc_cluster() before BED fitting")
     path <- paste0(prefix, ".bed")
     if (!file.exists(path)) stop("Missing genotype file: ", path)
     sm <- .metadata_table(paste0(prefix, ".fam"), FALSE)

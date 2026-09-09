@@ -140,6 +140,70 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cpp_spde_project
+Rcpp::List cpp_spde_project(const arma::mat& xy, const arma::imat& tv, const arma::mat& loc);
+RcppExport SEXP _spatialGPCA_cpp_spde_project(SEXP xySEXP, SEXP tvSEXP, SEXP locSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type xy(xySEXP);
+    Rcpp::traits::input_parameter< const arma::imat& >::type tv(tvSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type loc(locSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_spde_project(xy, tv, loc));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_spde_accumulate_matrix
+Rcpp::List cpp_spde_accumulate_matrix(const arma::sp_mat& B, const arma::mat& Xq, const arma::vec& counts, const arma::mat& G, int block_size, const arma::mat& projection);
+RcppExport SEXP _spatialGPCA_cpp_spde_accumulate_matrix(SEXP BSEXP, SEXP XqSEXP, SEXP countsSEXP, SEXP GSEXP, SEXP block_sizeSEXP, SEXP projectionSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type B(BSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Xq(XqSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type counts(countsSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type G(GSEXP);
+    Rcpp::traits::input_parameter< int >::type block_size(block_sizeSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type projection(projectionSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_spde_accumulate_matrix(B, Xq, counts, G, block_size, projection));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_spde_accumulate_reader
+Rcpp::List cpp_spde_accumulate_reader(const arma::sp_mat& B, const arma::mat& Xq, const arma::vec& counts, Rcpp::Function reader, int p, int block_size, const arma::mat& projection);
+RcppExport SEXP _spatialGPCA_cpp_spde_accumulate_reader(SEXP BSEXP, SEXP XqSEXP, SEXP countsSEXP, SEXP readerSEXP, SEXP pSEXP, SEXP block_sizeSEXP, SEXP projectionSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type B(BSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Xq(XqSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type counts(countsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Function >::type reader(readerSEXP);
+    Rcpp::traits::input_parameter< int >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type block_size(block_sizeSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type projection(projectionSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_spde_accumulate_reader(B, Xq, counts, reader, p, block_size, projection));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_spde_accumulate_bed
+Rcpp::List cpp_spde_accumulate_bed(const arma::sp_mat& B, const arma::mat& Xq, const arma::vec& counts, std::string path, Rcpp::IntegerVector locations, const arma::vec& af, int block_size, const arma::mat& projection);
+RcppExport SEXP _spatialGPCA_cpp_spde_accumulate_bed(SEXP BSEXP, SEXP XqSEXP, SEXP countsSEXP, SEXP pathSEXP, SEXP locationsSEXP, SEXP afSEXP, SEXP block_sizeSEXP, SEXP projectionSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type B(BSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Xq(XqSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type counts(countsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type path(pathSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type locations(locationsSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type af(afSEXP);
+    Rcpp::traits::input_parameter< int >::type block_size(block_sizeSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type projection(projectionSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_spde_accumulate_bed(B, Xq, counts, path, locations, af, block_size, projection));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_spatialGPCA_cpp_accumulate_matrix", (DL_FUNC) &_spatialGPCA_cpp_accumulate_matrix, 3},
@@ -152,6 +216,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_spatialGPCA_cpp_fitted", (DL_FUNC) &_spatialGPCA_cpp_fitted, 4},
     {"_spatialGPCA_cpp_cluster", (DL_FUNC) &_spatialGPCA_cpp_cluster, 3},
     {"_spatialGPCA_cpp_prepare", (DL_FUNC) &_spatialGPCA_cpp_prepare, 5},
+    {"_spatialGPCA_cpp_spde_project", (DL_FUNC) &_spatialGPCA_cpp_spde_project, 3},
+    {"_spatialGPCA_cpp_spde_accumulate_matrix", (DL_FUNC) &_spatialGPCA_cpp_spde_accumulate_matrix, 6},
+    {"_spatialGPCA_cpp_spde_accumulate_reader", (DL_FUNC) &_spatialGPCA_cpp_spde_accumulate_reader, 7},
+    {"_spatialGPCA_cpp_spde_accumulate_bed", (DL_FUNC) &_spatialGPCA_cpp_spde_accumulate_bed, 8},
     {NULL, NULL, 0}
 };
 

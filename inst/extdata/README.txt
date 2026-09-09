@@ -1,0 +1,1 @@
+Synthetic BED fixtures: 271 individuals, 80 locations, 120 diploid biallelic autosomal SNPs. missing.bed has exactly two missing calls. hard_G.txt and missing_G.txt contain independent 2f-imputed, location-averaged and HWE-standardized reference matrices. frequencies.afreq has standard PLINK2 columns.

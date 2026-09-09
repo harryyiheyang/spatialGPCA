@@ -1,184 +1,163 @@
 spatialGPCA
 ================
 
-Spatial genetic principal components from location-aggregated genotypes.
-`spatialGPCA` fits a weighted spatial Gaussian process conditional on
-fixed effects and returns the spatial PC subspace. Genotypes are read
-from prepared PLINK BED files in SNP blocks using a C++ engine.
+Spatial genetic principal components from location-aggregated genotypes,
+conditional on fixed effects. **SPDE is the recommended starting point
+for large SNP datasets.** It uses a triangular finite-element mesh and
+sparse genotype projection. The GP alternative is described below.
 
 ## Installation
 
 ``` r
-install.packages("remotes")
+install.packages(c("remotes", "RTriangle"))
 remotes::install_github("harryyiheyang/spatialGPCA")
 library(spatialGPCA)
 ```
 
-Source installation requires a C++17 compiler and R’s BLAS/LAPACK. On
-Windows, install the Rtools version appropriate for your R installation.
+Source installation requires a C++17 compiler and R’s BLAS/LAPACK; on
+Windows, install the Rtools version for your R installation. RTriangle
+constructs meshes.
 
 ## Inputs
 
-Use one individual table with **FID, IID, Lat, Lon in its first four
-columns**. Every remaining column is a numeric fixed effect, such as
-genetic PCs, an urban/rural indicator or income:
+Supply an individual table with **FID, IID, Lat, Lon as the first four
+columns**; Lat/Lon are in degrees. Every remaining column is a numeric
+fixed effect:
 
 ``` r
-head(table)
+table <- read.delim("individuals.tsv", colClasses = c(FID = "character", IID = "character"))
 # FID IID Lat Lon GPC1 GPC2 urban income
 ```
 
-The package matches FID + IID jointly, takes the intersection with FAM,
-and orders samples by FAM. Unique Lat/Lon pairs define locations. All
-fixed effects are averaged at locations, and an intercept is included
-automatically. No separate location table or count file is needed.
-Categorical covariates should be supplied as numeric indicator columns.
+The package matches FID + IID to FAM, keeps their intersection and
+orders by FAM. Shared coordinates define locations. Covariates are
+averaged at locations, sample counts become weights, and an intercept is
+added. Encode categorical covariates as numeric indicators.
 
-Use an externally prepared, merged BED/BIM/FAM fileset containing
-high-quality diploid biallelic autosomal SNPs. A standard PLINK2
-frequency file can be generated outside R when needed:
+Use a prepared BED/BIM/FAM fileset of diploid biallelic autosomal SNPs
+and external allele frequencies. For a fileset named `merged`, generate
+frequencies with:
 
 ``` sh
 plink2 --bfile merged --freq --out merged
 ```
 
-SNP frequencies are matched by ID and oriented to the BIM counted
-allele. Missing genotypes always receive the corresponding **2f** before
-location averaging, centering and scaling. Location weights use the
-complete matched sample counts.
+Frequencies are matched by SNP ID and oriented to the BIM counted
+allele. Missing genotypes receive **2f** before location averaging and
+standardization.
 
-## Explore geography
+## SPDE: recommended workflow
 
-Supply **rho in kilometres**. Clustering is a separate step that can be
-inspected and rerun before model preparation:
+### 1. Construct and inspect the mesh
 
 ``` r
-cls <- svgpc_cluster(table, rho = rho, clusters = 1000, bed = "merged")
-plot(cls)
-
-cls$rho <- 150                  # Example scale; choose for your geography.
-plot(cls)
+locations <- svgpc_spde_locations(table)
+mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = 150)
+plot(mesh)
 ```
 
-`clusters` is the initial centre count. Empty centres are removed.
-Classes containing at most floor(mean distinct-coordinate count / 2) are
-merged into the nearest current class, using a threshold fixed before
-merging. Every location remains assigned. Inspect
-`cls$locations$cluster`, `cls$centres` and `cls$clustering` for
-memberships, centres and class-count information.
-
-The map uses a density background and solid red cluster centres. A
-circle of radius rho is drawn around the centre with the highest
-displayed density. The companion curve shows the base kernel
-exp(-distance/rho), with distance in kilometres. Both use the same
-projected geographic coordinates.
+`max_area` is the maximum triangle area in km²; smaller values give a
+finer mesh. `buffer` extends the study’s bounding rectangle in km. These
+example values are for the US simulation below. Inspect the node count
+and mesh coverage before fitting. Construction uses RTriangle inside the
+package; no GP clustering is needed.
 
 <figure>
-<img src="inst/doc/us_clusters.png"
-alt="Geographic clusters in the US simulation" />
-<figcaption aria-hidden="true">Geographic clusters in the US
-simulation</figcaption>
+<img src="inst/doc/us_mesh.png"
+alt="SPDE mesh and synthetic US observation locations" />
+<figcaption aria-hidden="true">SPDE mesh and synthetic US observation
+locations</figcaption>
 </figure>
 
-## Fit spatial PCs
-
-Choose **one** selection method, `"REML"` or `"GCV"`. Lambda is the
-smoothing penalty sigma_e^2 / sigma_gp^2, estimated from the genotype
-statistics. It is distinct from the supplied geographic scale rho.
+### 2. Accumulate SNPs and estimate smoothing
 
 ``` r
-model <- svgpc_prepare(cls)
-svgpc_accumulate(model, "merged.afreq")
-parameters <- svgpc_select_lambda(model, method = "REML")
-parameters
+scale <- svgpc_spde_scale(distance = 150)
+model <- svgpc_spde_prepare_data(mesh, table, kappa = scale$kappa, bed = "merged")
+model <- svgpc_spde_accumulate(model, "merged.afreq")
+parameters <- svgpc_spde_select_lambda(model, method = "REML")
+```
 
-result <- svgpc_fit(model, parameters = parameters, components = 10)
+Here `distance = 150` means nominal Matérn correlation exp(-1) at 150
+km; the helper returns `kappa` in inverse km. Choose this geographic
+scale for your study, separately from mesh resolution. Lambda controls
+smoothing and is estimated from all SNPs; `"GCV"` is an alternative to
+`"REML"`. **Assign the accumulated model** as shown. SNPs are read in
+blocks without retaining the full genotype matrix.
+
+### 3. Choose the number of PCs
+
+``` r
+result <- svgpc_spde_fit(model, parameters = parameters, components = 10)
 PC <- result$outputs$raw_F_PCA$pcs
-locations <- result$spatial$locations
+locations <- model$spatial$locations
 ```
 
-The fit reuses the selected parameters. PC rows correspond to
-`locations`. The default output contains orthonormal raw-location PC
-vectors. BED processing uses 256-SNP blocks by default, without
-retaining the full genotype matrix. The matrix decompositions depend on
-spatial rank, not the number of SNPs.
+PC rows correspond to `locations`; columns are orthonormal raw-location
+PC vectors. Change `components` and repeat the fit to obtain more PCs
+without rereading BED or re-estimating lambda. To resume later, save
+both the model and selected parameters:
 
 ``` r
-result$rho <- 200
-plot(result)
+saveRDS(list(model = model, parameters = parameters), "spatial_model.rds")
 ```
 
-Editing `result$rho` updates the displayed circle and correlation curve.
-It does not silently refit the PCs; the fitted scale remains in
-`result$spatial$rho`. To fit another scale, update `cls$rho` and repeat
-preparation, accumulation and selection.
+## US example and measured runtime
 
-For selected SNPs, fitted geographic effects can be obtained from their
-standardized location means using the same parameter result:
-
-``` r
-Fhat <- svgpc_fitted(model, Y, parameters)
-```
-
-Here `Y` is a location-by-SNP matrix after the same 2f imputation,
-location averaging, centering and HWE scaling. `Fhat` contains
-geographic contributions, excluding the fixed-effect component.
-
-## US simulation
-
-The [complete R Markdown example](inst/examples/us_full_fit.Rmd)
-simulates **150,000 SNPs at 3,000 distinct US locations**, with 8,953
-individuals sharing these coordinates. The 1,000 initial clusters become
-864 centres. It runs the full BED workflow, obtains spatial PCs and
-compares fitted SNP geographic effects with their simulated values.
-
-These are synthetic coordinates and genotypes, not real genetic records.
-The first three fitted PCs have canonical correlations 0.984, 0.972 and
-0.931 with the three planted spatial fields, allowing for PC signs and
-rotations.
+The [complete US example](inst/examples/us_full_fit.Rmd) simulates
+**150,000 SNPs at 3,000 locations**, constructs its mesh using
+`svgpc_spde_mesh()`, and fits SPDE through the public package functions.
+Coordinates and genotypes are synthetic.
 
 <figure>
-<img src="inst/doc/spatial_pcs.png" alt="Fitted spatial PCs" />
-<figcaption aria-hidden="true">Fitted spatial PCs</figcaption>
+<img src="inst/doc/spatial_pcs.png"
+alt="SPDE spatial PCs at synthetic US locations" />
+<figcaption aria-hidden="true">SPDE spatial PCs at synthetic US
+locations</figcaption>
 </figure>
 
-The first four SNPs are selected before fitting. Their known and fitted
-geographic effects share a colour scale, so smoothing-induced amplitude
-shrinkage remains visible.
+On the same synthetic BED, a local benchmark measured **27.36 seconds**
+for SPDE accumulation and **30.18 seconds** for preparation,
+accumulation, REML and 10 PCs: **86% less accumulation time and 85% less
+analysis time** than the GP comparison. Large meshes still incur dense
+preparation/PCA costs, and the methods use different covariance models.
+See [benchmark setup and limits](inst/doc/PERFORMANCE.md).
 
-<figure>
-<img src="inst/doc/geographic_effects.png"
-alt="Known and fitted SNP geographic effects" />
-<figcaption aria-hidden="true">Known and fitted SNP geographic
-effects</figcaption>
-</figure>
-
-To compile the complete example from a source checkout, install `knitr`
-and `rmarkdown`, make Pandoc available (RStudio supplies it), and run:
+To render the example from a source checkout, install `knitr` and
+`rmarkdown`, make Pandoc available (included with RStudio), and run:
 
 ``` sh
 Rscript tools/build_rmd.R inst/examples/us_full_fit.Rmd inst/doc
 ```
 
-The example generates BED and PLINK2-format frequency files itself. For
-real analyses, use the existing BED and frequency files instead of
-simulating data. The default `Rscript tools/build_rmd.R` compiles this
-README.
+The example generates its BED and frequency files. Use your existing
+files for real data. `Rscript tools/build_rmd.R` rebuilds this README
+from `README.Rmd`.
 
-## Saving results and further documentation
+## GP alternative
+
+Use GP when you want the existing exponential-kernel model and
+geographic cluster centres. `rho` is its distance scale in km;
+`clusters` is the initial centre count. Empty and small classes are
+merged automatically.
 
 ``` r
-saveRDS(result, "spatial_result.rds")
-svgpc_save(model, "spatial_model.rds")
-model <- svgpc_load("spatial_model.rds")
+cls <- svgpc_cluster(table, rho = 150, clusters = 1000)
+plot(cls)
+model <- svgpc_prepare(cls, bed = "merged")
+svgpc_accumulate(model, "merged.afreq")
+parameters <- svgpc_select_lambda(model, method = "REML")
+result <- svgpc_fit(model, parameters = parameters, components = 10)
 ```
 
-Use `svgpc_info(model)` for dimensions, input provenance and computation
-times. [Workflow details](inst/doc/WORKFLOW.md) describe matching,
-aggregation and geographic projection. [Mathematical
-definitions](inst/doc/MATHEMATICS.md) give the weighted model,
-fixed-effect constraint, REML/GCV and PCA equations.
+GP accumulation updates its model in place. Use `svgpc_save()` /
+`svgpc_load()` for GP model caches; SPDE models use `saveRDS()` /
+`readRDS()`.
 
-## Author and license
+## Further documentation
+
+[SPDE model and advanced options](inst/doc/SPDE.md) · [GP
+workflow](inst/doc/WORKFLOW.md) · [GP
+mathematics](inst/doc/MATHEMATICS.md)
 
 Yihe Yang. Licensed under [GPL-3](inst/COPYING).
