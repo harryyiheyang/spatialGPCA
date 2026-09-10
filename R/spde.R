@@ -49,7 +49,8 @@ svgpc_spde_scale <- function(distance, correlation = exp(-1)) {
 }
 
 svgpc_spde_mesh <- function(locations, max_area, buffer, seed_vertices = NULL,
-                            vertices = NULL, segments = NULL, holes = NULL, min_angle = 21) {
+                            vertices = NULL, segments = NULL, holes = NULL, min_angle = 21,
+                            boundary = NULL) {
     if (!requireNamespace("RTriangle", quietly = TRUE)) stop("Install RTriangle to construct meshes")
     coordinate_system <- list(name = "Supplied planar coordinates", units = "km", center = c(0, 0), scale = 1)
     obs <- NULL
@@ -66,6 +67,30 @@ svgpc_spde_mesh <- function(locations, max_area, buffer, seed_vertices = NULL,
     buffer <- .spde_positive(buffer, "buffer (km)")
     if (length(min_angle) != 1L || !is.finite(min_angle) || min_angle <= 0 || min_angle > 33)
         stop("min_angle must lie in (0, 33]")
+    if (!is.null(boundary)) {
+        if (!is.null(vertices) || !is.null(segments) || !is.null(holes) || !is.null(seed_vertices))
+            stop("Use boundary alone, or supply a custom PSLG with vertices and segments")
+        if (is.null(coordinate_system$origin)) stop("boundary requires geographic locations")
+        if (!is.data.frame(boundary) || !all(c("Lat", "Lon") %in% names(boundary)) ||
+            !is.numeric(boundary$Lat) || !is.numeric(boundary$Lon) ||
+            any(!is.finite(as.matrix(boundary[, c("Lat", "Lon")]))))
+            stop("boundary must be a data frame with finite numeric Lat and Lon columns")
+        if (any(abs(boundary$Lat) > 90) || any(abs(boundary$Lon) > 180))
+            stop("boundary Lat/Lon must be geographic degrees")
+        v <- .geo_forward(boundary$Lat, boundary$Lon, coordinate_system$origin)
+        v <- v[grDevices::chull(v), , drop = FALSE]
+        n <- nrow(v)
+        if (n < 3L) stop("boundary needs at least three non-collinear points")
+        next_i <- c(2:n, 1L)
+        if (sum(v[, 1] * v[next_i, 2] - v[next_i, 1] * v[, 2]) < 0)
+            v <- v[n:1, , drop = FALSE]
+        edge <- v[next_i, , drop = FALSE] - v
+        normal <- cbind(edge[, 2], -edge[, 1]) / sqrt(rowSums(edge^2))
+        prev <- normal[c(n, 1:(n - 1L)), , drop = FALSE]
+        # Intersect adjacent supporting lines after shifting each outward by buffer.
+        vertices <- v + buffer * (prev + normal) / (1 + rowSums(prev * normal))
+        segments <- cbind(seq_len(n), next_i)
+    }
     if (is.null(vertices)) {
         # Expanded bounding rectangle: explicit finite-domain approximation.
         x <- range(xy[, 1]) + c(-buffer, buffer)
@@ -88,7 +113,8 @@ svgpc_spde_mesh <- function(locations, max_area, buffer, seed_vertices = NULL,
     keys <- paste(edges[, 1], edges[, 2], sep = ":")
     boundary_edges <- edges[!duplicated(keys) & !duplicated(keys, fromLast = TRUE), , drop = FALSE]
     out <- list(xy = mesh$P, tv = mesh$T, locations = obs, units = "km", max_area = max_area,
-                buffer = buffer, domain = if (custom_boundary) "custom PSLG" else "buffered rectangle",
+                buffer = buffer, domain = if (!is.null(boundary)) "buffered convex envelope" else
+                    if (custom_boundary) "custom PSLG" else "buffered rectangle",
                 vertex_count = nrow(mesh$P), triangle_count = nrow(mesh$T),
                 boundary_edges = boundary_edges, coordinate_system = coordinate_system,
                 parameters = list(max_area = max_area, buffer = buffer, min_angle = min_angle,

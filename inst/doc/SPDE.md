@@ -152,8 +152,10 @@ and is needed only for construction. Check the actual vertex count before fittin
 
 The README uses the bundled coarse Natural Earth US/UK convex envelopes,
 projects them into the model's coordinate frame, and offsets the boundary by
-50 km for the US or 5 km for the UK, independently of correlation range. `sf` performs that coordinate
-operation; `svgpc_spde_mesh()` constructs the triangles. With custom vertices,
+50 km for the US or 5 km for the UK, independently of correlation range.
+Supply these coordinates through the mesh function's `boundary` argument;
+the package projects and buffers them before RTriangle construction, without sf.
+With custom vertices,
 the `buffer` argument is metadata: it does not apply another offset. The full
 mesh is visible in the plot; coastline details do not force local refinement.
 

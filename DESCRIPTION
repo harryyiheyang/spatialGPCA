@@ -18,7 +18,7 @@ Encoding: UTF-8
 Depends: R (>= 4.0.0)
 Imports: Rcpp, ggplot2, maps, grid, Matrix
 LinkingTo: Rcpp, RcppArmadillo
-Suggests: knitr, rmarkdown, RTriangle, CppMatrix, sf
+Suggests: knitr, rmarkdown, RTriangle, CppMatrix
 SystemRequirements: C++17, BLAS, LAPACK
 NeedsCompilation: yes
 URL: https://github.com/harryyiheyang/spatialGPCA

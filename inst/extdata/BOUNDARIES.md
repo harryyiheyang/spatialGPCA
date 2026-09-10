@@ -16,10 +16,10 @@ and https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_admin_0_countries.
 Source documentation:
 https://www.naturalearthdata.com/downloads/110m-cultural-vectors/110m-admin-0-countries/.
 
-`tools/download_boundaries.R` reproduces both files. It constructs a convex
+The bundled coordinate files were prepared locally by constructing a convex
 outer envelope from 16 evenly spaced supporting directions in spherical
 azimuthal-equidistant coordinates (US origin 38,-97; UK origin 55,-3), then
-exports Lat/Lon degrees. Straight edges deliberately omit coastal detail.
+exporting Lat/Lon degrees. Straight edges deliberately omit coastal detail.
 The analysis example projects these coordinates into the model's frame and
 buffers the convex envelope by a fixed 50 km (US) or 5 km (UK), independently
 of the nominal correlation range.

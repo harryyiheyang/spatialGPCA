@@ -22,16 +22,16 @@ own analysis, replace the input paths and choose scales for your geography.
 ## Install and load
 
 ```{r install}
-install.packages(c("remotes", "RTriangle", "sf"))
+install.packages(c("remotes", "RTriangle"))
 remotes::install_github("harryyiheyang/spatialGPCA")
 library(spatialGPCA)
 library(ggplot2)
-library(sf)
 ```
 
 Source installation requires a C++17 compiler and R's BLAS/LAPACK. On Windows,
 install the Rtools version for your R installation. Mesh construction uses
-RTriangle internally; `sf` projects and buffers the supplied boundary coordinates.
+RTriangle internally. The package projects and buffers boundary coordinates;
+sf is not required.
 
 ## 1. Prepare the inputs
 
@@ -77,17 +77,7 @@ locations <- svgpc_spde_locations(table)
 range <- svgpc_spde_scale(1, correlation = .1)$kappa / scale$kappa
 buffer <- 50
 boundary <- read.delim(system.file("extdata", "us_boundary.tsv", package = "spatialGPCA"))
-origin <- locations$projection$origin
-crs <- paste0("+proj=aeqd +lat_0=", origin[1], " +lon_0=", origin[2],
-               " +R=6371008.8 +units=km")
-points <- st_as_sf(boundary, coords = c("Lon", "Lat"), crs = 4326)
-hull <- st_convex_hull(st_union(st_transform(points, crs)))
-domain <- st_buffer(hull, dist = buffer, joinStyle = "MITRE", mitreLimit = 5)
-vertices <- st_coordinates(domain)[, 1:2]
-vertices <- vertices[-nrow(vertices), ]
-segments <- cbind(seq_len(nrow(vertices)), c(2:nrow(vertices), 1))
-mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = buffer,
-                        vertices = vertices, segments = segments)
+mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = buffer, boundary = boundary)
 mesh
 plot(mesh, kappa = scale$kappa)
 ```
@@ -103,8 +93,8 @@ reaches 0.1, centred at the heatmap peak. No individual points are drawn.
 - `max_area`: maximum triangle area in **km²**. Smaller values give a finer mesh
   and increase computation and memory.
 - `buffer`: fixed outward offset in **km**, 50 for the US and 5 for the UK.
-  It is independent of the correlation range. `st_buffer()` applies this distance;
-  with custom vertices, the mesh function records it without applying it again.
+  It is independent of the correlation range. The mesh function applies it to
+  `boundary`; with custom `vertices` and `segments`, it records it without applying it again.
 - `distance`: the distance in km at which the chosen nominal correlation is
   reached; the default correlation is exp(-1). The helper returns `kappa` in
   inverse km. To set a 300 km **0.1 range** directly, use
@@ -279,8 +269,10 @@ SPDE reduced total analysis time by **86.5%** in these runs. Canonical
 correlations near 1 indicate recovery of the three planted spatial directions,
 allowing arbitrary PC signs and rotations. Recovery is similar here; this is
 one simulation, not evidence that either method is universally more accurate.
-GP uses rho = 135.853 km; the SPDE example matches exp(-1) at 150 km and uses
-1,213 mesh vertices with a fixed 50 km buffer. Their covariance models and settings differ. See
+GP uses rho = 135.853 km; the recorded SPDE run matches exp(-1) at 150 km and used
+1,213 mesh vertices with a fixed 50 km buffer. The current sf-free constructor
+produces 1,212 vertices for this example; the table retains the recorded timings.
+Their covariance models and settings differ. See
 [timings, settings and earlier comparison](inst/doc/PERFORMANCE.md).
 
 ## Reproduce the US example

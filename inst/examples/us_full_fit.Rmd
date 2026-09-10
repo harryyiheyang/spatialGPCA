@@ -14,7 +14,6 @@ knitr::opts_chunk$set(echo = TRUE, error = FALSE, collapse = TRUE,
                       dpi = 150, out.width = "100%")
 library(spatialGPCA)
 library(ggplot2)
-library(sf)
 output <- Sys.getenv("SPATIALGPCA_FULL_OUTPUT",
                      unset = file.path(tempdir(), "spatialGPCA_full_fit"))
 dir.create(output, recursive = TRUE, showWarnings = FALSE)
@@ -143,17 +142,7 @@ scale <- svgpc_spde_scale(distance = 150)
 range <- svgpc_spde_scale(1, correlation = .1)$kappa / scale$kappa
 buffer <- 50
 boundary <- read.delim(system.file("extdata", "us_boundary.tsv", package = "spatialGPCA"))
-origin <- locations$projection$origin
-crs <- paste0("+proj=aeqd +lat_0=", origin[1], " +lon_0=", origin[2],
-               " +R=6371008.8 +units=km")
-points <- st_as_sf(boundary, coords = c("Lon", "Lat"), crs = 4326)
-hull <- st_convex_hull(st_union(st_transform(points, crs)))
-domain <- st_buffer(hull, dist = buffer, joinStyle = "MITRE", mitreLimit = 5)
-vertices <- st_coordinates(domain)[, 1:2]
-vertices <- vertices[-nrow(vertices), ]
-segments <- cbind(seq_len(nrow(vertices)), c(2:nrow(vertices), 1))
-mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = buffer,
-                        vertices = vertices, segments = segments)
+mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = buffer, boundary = boundary)
 mesh
 png(file.path(output, "us_mesh.png"), width = 1600, height = 900, res = 160)
 plot(mesh, kappa = scale$kappa)
@@ -165,10 +154,9 @@ The background is relative individual density; small red vertices are the SPDE
 knots. The circle marks the nominal correlation-0.1 distance computed from kappa.
 The maximum triangle area is 8,000 km². A coarse Natural Earth envelope of the
 contiguous US is convexified and extended by a fixed 50 km, independently of
-the correlation range. Straight joins avoid tracing the coastline. `sf` only projects and
-buffers coordinates; the package's mesh function constructs all triangles.
-With custom vertices, `buffer` records the distance already applied above;
-the mesh constructor does not buffer a second time. The plot shows the full mesh.
+the correlation range. The package projects and buffers the boundary with straight
+joins, then constructs triangles through RTriangle. No sf is required.
+The plot shows the full mesh.
 
 ## Fit every SNP and obtain spatial PCs
 

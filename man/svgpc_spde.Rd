@@ -29,7 +29,8 @@ transformations. Does not modify the existing GP path.}
 svgpc_spde_correlation(distance, kappa)
 svgpc_spde_scale(distance, correlation = exp(-1))
 svgpc_spde_mesh(locations, max_area, buffer, seed_vertices = NULL,
-               vertices = NULL, segments = NULL, holes = NULL, min_angle = 21)
+               vertices = NULL, segments = NULL, holes = NULL, min_angle = 21,
+               boundary = NULL)
 svgpc_spde_basis(mesh, locations, kappa, tau = 1)
 svgpc_spde_prepare(basis, pcs = NULL, counts, conditioning = c("qr", "profile"),
                    accumulation = c("auto", "moments", "directions"))
@@ -72,8 +73,14 @@ the planar coordinate matrix. In plot, a location object or its locations data
 frame supplies coordinates and counts; by default these are retained by the mesh.
 For older saved meshes, supply this explicitly in the mesh's projection.}
 \item{max_area}{Maximum triangle area in square km.}
-\item{buffer}{Positive extension in km for the default rectangular boundary. Required
-even with a custom boundary, where it is metadata only and is not applied.}
+\item{buffer}{Positive outward extension in km for the default rectangle or the
+convex envelope supplied through boundary. With custom vertices it is metadata
+only and is not applied again.}
+\item{boundary}{Optional data frame with Lat and Lon columns in degrees, used with
+geographic locations. The package projects these points, takes their convex hull,
+and offsets its edges outward by buffer with straight joins before triangulation.
+For a non-convex domain use vertices and segments instead. Do not combine boundary
+with custom PSLG arguments or seed_vertices. No sf dependency is required.}
 \item{seed_vertices}{Optional extra mesh seed coordinates in km, used only with
 the default rectangular boundary.}
 \item{vertices}{Optional custom planar PSLG vertices.}
