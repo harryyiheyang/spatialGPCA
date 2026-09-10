@@ -1,6 +1,6 @@
 # SPDE reference
 
-Start with the [README workflow](../../README.md#spde-recommended-workflow).
+Start with the [README workflow](../../README.md#2-construct-the-spde-mesh-and-inspect-its-range).
 The `svgpc_spde_` functions return ordinary lists; assign accumulation results
 and use `saveRDS/readRDS` for storage.
 
@@ -138,10 +138,24 @@ projection. `svgpc_spde_prepare_data(mesh, table, kappa, bed)` preserves the
 selected nodes, triangles and coordinate frame after FAM matching. Out-of-mesh
 locations cause an error. `mesh$xy` stores vertices; `mesh$tv` stores triangles.
 
+`plot(mesh, kappa = scale$kappa)` draws one map: location-count density, small
+mesh vertices and the nominal correlation-0.1 circle. GP uses the same display
+with radius `rho * log(10)`. Both circles are centred at the density-grid peak.
+Mesh construction retains only aggregated coordinates/counts for the background.
+Without kappa, a mesh plot makes no range assumption. Older saved meshes can
+supply a location object explicitly with `locations = ...` in the mesh's frame.
+
 The default domain is a buffered rectangle. Custom planar `vertices`, one-based
 boundary `segments` and `holes` support nonrectangular domains; coastlines and
 barriers are not inferred. RTriangle can add nodes to satisfy area/angle limits
 and is needed only for construction. Check the actual vertex count before fitting.
+
+The README uses the bundled coarse Natural Earth US/UK convex envelopes,
+projects them into the model's coordinate frame, and offsets the boundary by
+50 km for the US or 5 km for the UK, independently of correlation range. `sf` performs that coordinate
+operation; `svgpc_spde_mesh()` constructs the triangles. With custom vertices,
+the `buffer` argument is metadata: it does not apply another offset. The full
+mesh is visible in the plot; coastline details do not force local refinement.
 
 For other genotype sources, `svgpc_spde_accumulate_reader` calls
 `reader(start, end)` with consecutive one-based inclusive SNP indices. Each

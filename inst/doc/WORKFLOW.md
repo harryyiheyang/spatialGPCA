@@ -94,25 +94,20 @@ show state boundaries, while other regions use a world outline.
 The background shows relative individual density, computed by binning location
 counts on a fixed display grid and smoothing those counts. It is a visual
 summary, not a density per square kilometre. Red dots mark every actual
-cluster centre; their size decreases for larger cluster counts. Individual dots,
+cluster centre; `node_size` controls their size in mm. Individual dots,
 per-cluster colours and numbered labels are omitted to keep large maps readable.
 Display smoothing does not depend on rho or the number of clusters. Exact cluster
 membership remains available in `cls$locations$cluster`.
-The map shows a circle of radius rho around the cluster centre with the highest
-displayed individual density (bilinearly interpolated at the centres). The circle
-is constructed in the model's projected km coordinates and mapped back to Lat/Lon.
-Its radius and the correlation curve update on rho edits. The map expands to
-include the circle; the density calculation and selected centre remain unchanged.
-Plots use solid red dots, compact legends, titles and coordinate ticks, without
-subtitles, axis titles, captions or explanatory annotations.
+The map shows one density panel with small red centres and a circle of radius
+`rho * log(10)` at the density-grid peak. The circle is constructed in projected
+km and transformed back to Lat/Lon: its boundary has nominal exponential
+correlation 0.1. GP and SPDE share the same density grid, colours and node sizes.
+Individual points and the former separate correlation panel are not drawn.
 
-rho is supplied by the user and controls the base kernel exp(-distance/rho).
-Changing `cls$rho` before preparation changes the next model's kernel.
-Changing `result$rho` afterwards changes only the displayed kernel curve;
-it does not silently re-estimate the fitted PCs. The original fitted geography
-remains in `result$spatial`. Reprepare and accumulate to fit a different rho.
-The displayed curve is the base kernel, not an empirical genotype correlation
-or the generally nonstationary covariance after the fixed-effect constraint.
+Changing `cls$rho` updates the circle. Changing a fitted result's rho changes
+only its displayed circle; reprepare and accumulate to fit another scale. The
+circle is a nominal kernel reference, not the constrained fitted covariance or
+a hard cutoff. `plot()` invisibly returns the single ggplot object.
 
 ## Model
 

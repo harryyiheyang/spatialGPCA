@@ -25,18 +25,22 @@ print.svgpc_spde_locations <- function(x, ...) {
     invisible(x)
 }
 
-plot.svgpc_spde_mesh <- function(x, show_vertices = TRUE, vertex_cex = 0.45,
-                                 main = NULL, xlab = "x (km)", ylab = "y (km)", ...) {
-    if (is.null(main)) main <- paste("SPDE mesh:", nrow(x$xy), "vertices /", nrow(x$tv), "triangles")
+plot.svgpc_spde_mesh <- function(x, show_vertices = TRUE, vertex_cex = .3,
+                                 main = NULL, xlab = NULL, ylab = NULL,
+                                 kappa = NULL, locations = x$locations, ...) {
+    if (inherits(locations, "svgpc_spde_locations")) locations <- locations$locations
+    if (is.null(locations)) stop("Supply locations from svgpc_spde_locations() for this saved mesh")
+    vertex_cex <- .spde_positive(vertex_cex, "vertex_cex")
+    radius <- if (is.null(kappa)) NULL else svgpc_spde_scale(1, correlation = .1)$kappa /
+        .spde_positive(kappa, "kappa (km^-1)")
+    if (is.null(main)) main <- paste("SPDE:", nrow(x$xy), "vertices")
     tv <- x$tv
     edges <- rbind(tv[, 1:2], tv[, 2:3], tv[, c(3, 1)])
     edges <- unique(cbind(pmin(edges[, 1], edges[, 2]), pmax(edges[, 1], edges[, 2])))
-    graphics::plot(x$xy, type = "n", asp = 1, xlab = xlab, ylab = ylab, main = main, ...)
-    graphics::segments(x$xy[edges[, 1], 1], x$xy[edges[, 1], 2],
-                       x$xy[edges[, 2], 1], x$xy[edges[, 2], 2], col = "grey65", lwd = 0.6)
-    e <- x$boundary_edges
-    graphics::segments(x$xy[e[, 1], 1], x$xy[e[, 1], 2],
-                       x$xy[e[, 2], 1], x$xy[e[, 2], 2], col = "#176187", lwd = 1.5)
-    if (show_vertices) graphics::points(x$xy, pch = 16, cex = vertex_cex, col = "#17384D")
-    invisible(x)
+    p <- .spatial_map(locations, x$xy, x$coordinate_system, radius = radius,
+                       edges = edges,
+                       node_size = if (show_vertices) vertex_cex else 0,
+                       main = main, xlab = xlab, ylab = ylab)
+    print(p)
+    invisible(p)
 }

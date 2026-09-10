@@ -1,5 +1,38 @@
 # SPDE timing
 
+## README convex-boundary run (2026-09-10)
+
+The US example was refitted on its existing synthetic BED with the new
+coarse convex country envelope, buffered by a fixed 50 km independently of range.
+The range is 290.7879 km and maximum triangle area
+8,000 km². There are 1,213 mesh vertices, 872 supported vertices and rank 861;
+`auto` selected `moments`. Nominal correlation is exp(-1) at 150 km.
+
+| Stage | New SPDE seconds | Completed GP reference seconds |
+| --- | ---: | ---: |
+| Preparation | 2.03 | 3.49 |
+| BED accumulation | 24.64 | 198.78 |
+| REML | <0.01 | 0.01 |
+| 10 PCs | 0.64 | 0.39 |
+| Analysis total | **27.31** | **202.67** |
+
+The reference GP run below was reused, not rerun. The regenerated BED, BIM,
+FAM and frequency files have exactly the same MD5 hashes as its recorded inputs.
+Both fit all 150,000 SNPs at 3,000 locations for 8,953 individuals, with the same
+20,136,705 missing calls and fixed-effect columns. BED MD5 is
+`5bc483bca91188fec4f0061f7c004ca5`; frequency-file MD5 is
+`94e024650467282221d3374dd8117d55`. Generation and plotting are excluded.
+
+The first three PCs recover the planted spatial subspace with canonical
+correlations 0.98438, 0.97370, 0.93769 (new SPDE), compared with
+0.98398, 0.97167, 0.93065 (GP reference). These permit sign changes and rotations.
+Total time is 86.5% lower for SPDE in this comparison. This is a single rerun
+against a completed reference, not a repeated or simultaneous benchmark.
+GP rho is 135.853 km; this SPDE example uses 150 km as its e-folding distance.
+The distinct kernels and mesh settings preclude a general accuracy ranking.
+
+## Earlier matched-scale timing comparison
+
 One sequential comparison on Windows 11, R 4.6.1, spatialGPCA 0.3.0, with
 CppMatrix available and the default matrix-product backend. Both methods used
 the same synthetic BED, external allele frequencies, 256-SNP blocks, 8,953

@@ -14,6 +14,7 @@ knitr::opts_chunk$set(echo = TRUE, error = FALSE, collapse = TRUE,
                       dpi = 150, out.width = "100%")
 library(spatialGPCA)
 library(ggplot2)
+library(sf)
 output <- Sys.getenv("SPATIALGPCA_FULL_OUTPUT",
                      unset = file.path(tempdir(), "spatialGPCA_full_fit"))
 dir.create(output, recursive = TRUE, showWarnings = FALSE)
@@ -138,28 +139,45 @@ uses the geographic table and does not require BED or GP clustering.
 ```{r mesh}
 table <- table[sample(nrow(table)), ]
 locations <- svgpc_spde_locations(table)
-mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = 150)
+scale <- svgpc_spde_scale(distance = 150)
+range <- svgpc_spde_scale(1, correlation = .1)$kappa / scale$kappa
+buffer <- 50
+boundary <- read.delim(system.file("extdata", "us_boundary.tsv", package = "spatialGPCA"))
+origin <- locations$projection$origin
+crs <- paste0("+proj=aeqd +lat_0=", origin[1], " +lon_0=", origin[2],
+               " +R=6371008.8 +units=km")
+points <- st_as_sf(boundary, coords = c("Lon", "Lat"), crs = 4326)
+hull <- st_convex_hull(st_union(st_transform(points, crs)))
+domain <- st_buffer(hull, dist = buffer, joinStyle = "MITRE", mitreLimit = 5)
+vertices <- st_coordinates(domain)[, 1:2]
+vertices <- vertices[-nrow(vertices), ]
+segments <- cbind(seq_len(nrow(vertices)), c(2:nrow(vertices), 1))
+mesh <- svgpc_spde_mesh(locations, max_area = 8000, buffer = buffer,
+                        vertices = vertices, segments = segments)
 mesh
 png(file.path(output, "us_mesh.png"), width = 1600, height = 900, res = 160)
-plot(mesh)
-points(locations$locations[, c("x", "y")], pch = 16, cex = .25, col = "#C76A36")
+plot(mesh, kappa = scale$kappa)
 invisible(dev.off())
 knitr::include_graphics(file.path(output, "us_mesh.png"))
 ```
 
-Orange points are the observation locations; mesh vertices are the SPDE knots.
-The maximum triangle area is 8,000 km² and the rectangular boundary extends
-150 km beyond the study bounds. The mesh is not clipped to coastlines.
-These are illustrative choices; check mesh resolution and buffer for your study.
+The background is relative individual density; small red vertices are the SPDE
+knots. The circle marks the nominal correlation-0.1 distance computed from kappa.
+The maximum triangle area is 8,000 km². A coarse Natural Earth envelope of the
+contiguous US is convexified and extended by a fixed 50 km, independently of
+the correlation range. Straight joins avoid tracing the coastline. `sf` only projects and
+buffers coordinates; the package's mesh function constructs all triangles.
+With custom vertices, `buffer` records the distance already applied above;
+the mesh constructor does not buffer a second time. The plot shows the full mesh.
 
 ## Fit every SNP and obtain spatial PCs
 
 ```{r fit}
-scale <- svgpc_spde_scale(distance = 150)
-model <- svgpc_spde_prepare_data(mesh, table, kappa = scale$kappa, bed = prefix)
-model <- svgpc_spde_accumulate(model, paste0(prefix, ".afreq"))
-parameters <- svgpc_spde_select_lambda(model, method = "REML")
-result <- svgpc_spde_fit(model, parameters = parameters, components = 10)
+timing <- numeric()
+timing["Preparation"] <- system.time(model <- svgpc_spde_prepare_data(mesh, table, kappa = scale$kappa, bed = prefix))[3]
+timing["BED accumulation"] <- system.time(model <- svgpc_spde_accumulate(model, paste0(prefix, ".afreq")))[3]
+timing["REML"] <- system.time(parameters <- svgpc_spde_select_lambda(model, method = "REML"))[3]
+timing["10 PCs"] <- system.time(result <- svgpc_spde_fit(model, parameters = parameters, components = 10))[3]
 PC <- result$outputs$raw_F_PCA$pcs
 locations <- model$spatial$locations
 parameters
@@ -207,6 +225,7 @@ cs <- svd(crossprod(Q, PC[, 1:3]), nu = 0, nv = 0)$d
 recovery <- data.frame(direction = 1:3, canonical_correlation = cs,
                        angle_degrees = acos(pmin(1, cs)) * 180 / pi)
 recovery
+write.table(recovery, file.path(output, "recovery.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 ```
 
 ## SNP-specific geographic effects
@@ -254,6 +273,13 @@ ggsave(file.path(output, "geographic_effects.png"), Pe, width = 13, height = 7, 
 
 ```{r save}
 saveRDS(list(result = result, locations = locations), file.path(output, "result.rds"))
+write.table(data.frame(stage = names(timing), seconds = unname(timing)),
+            file.path(output, "timing.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(data.frame(vertices = model$m, active_vertices = length(model$active),
+                       rank = length(model$d), accumulation = model$accumulation,
+                       range_km = range, buffer_km = buffer, n_snps = model$p,
+                       missing_calls = model$missing),
+            file.path(output, "checks.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 write.table(cbind(locations[, c("Lat", "Lon", "count")], PC),
             file.path(output, "spatial_pcs.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 ```

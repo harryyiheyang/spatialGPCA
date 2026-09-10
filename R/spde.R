@@ -52,13 +52,16 @@ svgpc_spde_mesh <- function(locations, max_area, buffer, seed_vertices = NULL,
                             vertices = NULL, segments = NULL, holes = NULL, min_angle = 21) {
     if (!requireNamespace("RTriangle", quietly = TRUE)) stop("Install RTriangle to construct meshes")
     coordinate_system <- list(name = "Supplied planar coordinates", units = "km", center = c(0, 0), scale = 1)
+    obs <- NULL
     if (inherits(locations, "svgpc_spde_locations")) {
         coordinate_system <- locations$projection
+        obs <- locations$locations
         locations <- locations$locations[, c("x", "y")]
     }
     custom_boundary <- !is.null(vertices)
     xy <- .matrix_double(locations)
     if (ncol(xy) != 2L || nrow(xy) < 3L || any(!is.finite(xy))) stop("locations must be finite planar km coordinates")
+    if (is.null(obs)) obs <- data.frame(x = xy[, 1], y = xy[, 2], count = 1)
     max_area <- .spde_positive(max_area, "max_area (km^2)")
     buffer <- .spde_positive(buffer, "buffer (km)")
     if (length(min_angle) != 1L || !is.finite(min_angle) || min_angle <= 0 || min_angle > 33)
@@ -84,7 +87,7 @@ svgpc_spde_mesh <- function(locations, max_area, buffer, seed_vertices = NULL,
     edges <- cbind(pmin(edges[, 1], edges[, 2]), pmax(edges[, 1], edges[, 2]))
     keys <- paste(edges[, 1], edges[, 2], sep = ":")
     boundary_edges <- edges[!duplicated(keys) & !duplicated(keys, fromLast = TRUE), , drop = FALSE]
-    out <- list(xy = mesh$P, tv = mesh$T, units = "km", max_area = max_area,
+    out <- list(xy = mesh$P, tv = mesh$T, locations = obs, units = "km", max_area = max_area,
                 buffer = buffer, domain = if (custom_boundary) "custom PSLG" else "buffered rectangle",
                 vertex_count = nrow(mesh$P), triangle_count = nrow(mesh$T),
                 boundary_edges = boundary_edges, coordinate_system = coordinate_system,

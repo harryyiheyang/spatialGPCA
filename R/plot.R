@@ -1,4 +1,4 @@
-utils::globalVariables(c("long", "lat", "group", "Lon", "Lat", "density", "distance", "correlation"))
+utils::globalVariables(c("long", "lat", "group", "Lon", "Lat", "density", "lon_end", "lat_end"))
 
 .map_frame <- function(x) {
     ll <- x$locations
@@ -33,93 +33,89 @@ utils::globalVariables(c("long", "lat", "group", "Lon", "Lat", "density", "dista
     H <- Kx %*% H %*% t(Ky)
     grid <- expand.grid(Lon = limits$x[1] + (seq_len(nx) - .5) * dx,
                         Lat = limits$y[1] + (seq_len(ny) - .5) * dy)
-    grid$density <- as.vector(H) / max(H)
+    grid$density <- log1p(as.vector(H)) / log1p(max(H))
     grid
 }
 
-.rho_circle <- function(x, density) {
-    lon <- sort(unique(density$Lon))
-    lat <- sort(unique(density$Lat))
-    H <- matrix(density$density, length(lon), length(lat))
-    # Interpolate the displayed individual density at each actual centre.
-    u <- pmax(1, pmin(length(lon), 1 + (x$centres$Lon - lon[1]) / diff(lon)[1]))
-    v <- pmax(1, pmin(length(lat), 1 + (x$centres$Lat - lat[1]) / diff(lat)[1]))
-    i <- pmin(floor(u), length(lon) - 1L)
-    j <- pmin(floor(v), length(lat) - 1L)
-    a <- u - i
-    b <- v - j
-    value <- (1-a) * (1-b) * H[cbind(i, j)] + a * (1-b) * H[cbind(i+1, j)] +
-             (1-a) * b * H[cbind(i, j+1)] + a * b * H[cbind(i+1, j+1)]
-    centre <- which.max(value)
-    angle <- seq(0, 2*pi, length.out = 721)
-    xy <- x$rho * cbind(cos(angle), sin(angle))
-    xy <- sweep(xy, 2, as.numeric(x$centres[centre, c("x", "y")]), "+")
-    list(path = .geo_inverse(xy, x$projection$origin), centre = centre)
+.range_circle <- function(density, projection, radius) {
+    i <- which.max(density$density)
+    centre <- if (is.null(projection$origin)) c(density$Lon[i], density$Lat[i]) else
+        as.numeric(.geo_forward(density$Lat[i], density$Lon[i], projection$origin))
+    angle <- seq(0, 2 * pi, length.out = 721)
+    xy <- sweep(radius * cbind(cos(angle), sin(angle)), 2L, centre, "+")
+    path <- if (is.null(projection$origin)) data.frame(Lon = xy[, 1], Lat = xy[, 2]) else
+        .geo_inverse(xy, projection$origin)
+    list(path = path, xy = xy, centre = centre, radius = radius)
 }
 
-plot.svgpc_cluster <- function(x, ...) {
-    if (length(x$rho) != 1L || !is.finite(x$rho) || x$rho <= 0)
-        stop("rho must be a positive distance in km")
-    map <- .map_frame(x)
-    loc <- x$locations
-    centres <- x$centres
+.spatial_map <- function(loc, xy, projection, radius = NULL, edges = NULL,
+                         node_size = .3, main = NULL,
+                         xlab = NULL, ylab = NULL) {
+    geographic <- !is.null(projection$origin)
+    if (geographic) {
+        map <- .map_frame(list(locations = loc))
+        nodes <- .geo_inverse(xy, projection$origin)
+    } else {
+        loc$Lon <- loc$x; loc$Lat <- loc$y
+        nodes <- data.frame(Lon = xy[, 1], Lat = xy[, 2])
+        pad <- pmax(c(diff(range(loc$x)), diff(range(loc$y))) * .08, .01)
+        map <- list(data = NULL, limits = list(x = range(loc$x, xy[, 1]) + c(-1, 1) * pad[1],
+                                               y = range(loc$y, xy[, 2]) + c(-1, 1) * pad[2]))
+        if (is.null(xlab)) xlab <- "x (km)"
+        if (is.null(ylab)) ylab <- "y (km)"
+    }
     density <- .individual_density(loc, map$limits)
-    centre_size <- max(.8, min(3.5, 3.5 * (24 / nrow(centres))^.25))
-    # Distance support is stable when rho is edited, so before/after curves compare directly.
-    extent <- sqrt(diff(range(loc$x))^2 + diff(range(loc$y))^2)
-    circle <- .rho_circle(x, density)
-    view <- list(x = range(map$limits$x, range(circle$path$Lon) + c(-1, 1) * .02 * diff(map$limits$x)),
-                 y = range(map$limits$y, range(circle$path$Lat) + c(-1, 1) * .02 * diff(map$limits$y)))
-    distance <- seq(0, extent, length.out = 401)
-    curve <- data.frame(distance = distance, correlation = exp(-distance / x$rho))
-    theme <- ggplot2::theme_minimal(base_size = 12) + ggplot2::theme(
-        panel.grid.minor = ggplot2::element_blank(),
-        plot.title = ggplot2::element_text(face = "bold", colour = "#172B3A"),
-        axis.title = ggplot2::element_blank(),
-        legend.text = ggplot2::element_text(size = 8),
-        legend.title = ggplot2::element_text(size = 8),
-        legend.key.size = grid::unit(3, "mm"),
-        legend.spacing.x = grid::unit(2, "mm"),
-        plot.background = ggplot2::element_rect(fill = "white", colour = NA))
-    p1 <- ggplot2::ggplot() +
-        ggplot2::geom_polygon(data = map$data, ggplot2::aes(x = long, y = lat, group = group),
-                              fill = "#F1F3F5", colour = NA) +
-        ggplot2::geom_raster(data = density, ggplot2::aes(x = Lon, y = Lat, fill = density),
-                            interpolate = TRUE) +
-        ggplot2::geom_polygon(data = map$data, ggplot2::aes(x = long, y = lat, group = group),
-                              fill = NA, colour = "#A9B7C1", linewidth = .25) +
-        ggplot2::geom_point(data = centres, ggplot2::aes(x = Lon, y = Lat, shape = "Centres"),
-                            colour = "#C73535", size = centre_size, stroke = 0) +
-        ggplot2::scale_shape_manual(values = c("Centres" = 16), name = NULL) +
+    circle <- if (is.null(radius)) NULL else .range_circle(density, projection, radius)
+    view <- map$limits
+    if (!is.null(edges)) {
+        view$x <- range(view$x, nodes$Lon)
+        view$y <- range(view$y, nodes$Lat)
+    }
+    if (!is.null(circle)) {
+        view$x <- range(view$x, circle$path$Lon)
+        view$y <- range(view$y, circle$path$Lat)
+        main <- paste0(main, " | 0.1 range: ", format(round(radius, 1), trim = TRUE), " km")
+    }
+    p <- ggplot2::ggplot(density, ggplot2::aes(Lon, Lat)) +
+        ggplot2::geom_raster(ggplot2::aes(fill = density), interpolate = TRUE) +
         ggplot2::scale_fill_gradientn(colours = c("#F7F9FA", "#CDE3ED", "#71AEC7", "#267392", "#12445C"),
                                       limits = c(0, 1), breaks = c(0, 1), labels = c("Low", "High"),
-                                      name = "Density") +
-        ggplot2::guides(shape = ggplot2::guide_legend(override.aes = list(size = 2)),
-                         fill = ggplot2::guide_colourbar(barwidth = grid::unit(18, "mm"),
-                                                        barheight = grid::unit(2, "mm"))) +
-        ggplot2::geom_path(data = circle$path, ggplot2::aes(x = Lon, y = Lat),
-                           colour = "#172B3A", linewidth = .8) +
-        ggplot2::coord_quickmap(xlim = view$x, ylim = view$y, expand = FALSE) +
-        ggplot2::labs(title = "Geographic clusters", x = NULL, y = NULL) + theme +
-        ggplot2::theme(legend.position = "bottom", panel.grid.major = ggplot2::element_blank(),
-                         panel.background = ggplot2::element_rect(fill = "#F7F9FA", colour = NA))
-    p2 <- ggplot2::ggplot(curve, ggplot2::aes(x = distance, y = correlation)) +
-        ggplot2::geom_hline(yintercept = exp(-1), colour = "#BDC7CC", linetype = 3) +
-        ggplot2::geom_line(colour = "#176B87", linewidth = 1.2) +
-        ggplot2::annotate("segment", x = x$rho, xend = x$rho,
-                           y = 0, yend = exp(-1),
-                           colour = "#172B3A", linetype = 2, linewidth = .5) +
-        ggplot2::annotate("point", x = x$rho, y = exp(-1),
-                           colour = "#172B3A", size = 2.5) +
-        ggplot2::coord_cartesian(xlim = c(0, extent), ylim = c(0, 1), expand = FALSE) +
-        ggplot2::labs(title = paste0("Correlation decay (rho = ", format(x$rho, trim = TRUE), " km)"),
-                       x = NULL, y = NULL) + theme
-    grid::grid.newpage()
-    grid::pushViewport(grid::viewport(layout = grid::grid.layout(1, 2, widths = c(1.8, 1))))
-    print(p1, vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 1))
-    print(p2, vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 2))
-    grid::popViewport()
-    invisible(list(map = p1, correlation = p2))
+                                      name = "Sample density (log scale)")
+    if (!is.null(edges)) {
+        d <- data.frame(Lon = nodes$Lon[edges[, 1]], Lat = nodes$Lat[edges[, 1]],
+                        lon_end = nodes$Lon[edges[, 2]], lat_end = nodes$Lat[edges[, 2]])
+        p <- p + ggplot2::geom_segment(data = d,
+            ggplot2::aes(xend = lon_end, yend = lat_end), colour = "#687D89",
+            linewidth = .12, alpha = .4)
+    }
+    if (node_size > 0) p <- p + ggplot2::geom_point(data = nodes, colour = "#C73535",
+                                                   size = node_size, stroke = 0)
+    if (geographic) p <- p + ggplot2::geom_polygon(data = map$data,
+        ggplot2::aes(x = long, y = lat, group = group), inherit.aes = FALSE,
+        fill = NA, colour = "#253C49", linewidth = .5)
+    if (!is.null(circle)) p <- p + ggplot2::geom_path(data = circle$path,
+        colour = "#182B35", linewidth = .8)
+    p <- p + (if (geographic) ggplot2::coord_quickmap(xlim = view$x, ylim = view$y, expand = FALSE) else
+        ggplot2::coord_fixed(xlim = view$x, ylim = view$y, expand = FALSE)) +
+        ggplot2::labs(title = main, x = xlab, y = ylab) +
+        ggplot2::theme_minimal(base_size = 12) +
+        ggplot2::theme(panel.grid = ggplot2::element_blank(), legend.position = "bottom",
+                       plot.title = ggplot2::element_text(face = "bold", colour = "#172B3A"),
+                       panel.background = ggplot2::element_rect(fill = "#F7F9FA", colour = NA)) +
+        ggplot2::guides(fill = ggplot2::guide_colourbar(title.position = "top", barwidth = grid::unit(40, "mm"),
+                                                       barheight = grid::unit(2, "mm")))
+    attr(p, "range_circle") <- circle
+    p
+}
+
+plot.svgpc_cluster <- function(x, node_size = .3, main = NULL, ...) {
+    rho <- .spde_positive(x$rho, "rho (km)")
+    node_size <- .spde_positive(node_size, "node_size")
+    if (is.null(main)) main <- paste("GP:", nrow(x$centres), "centres")
+    p <- .spatial_map(x$locations, as.matrix(x$centres[, c("x", "y")]),
+                       x$projection, radius = log(10) * rho, node_size = node_size, main = main)
+    print(p)
+    invisible(p)
 }
 
 plot.svgpc_fit <- function(x, ...) {

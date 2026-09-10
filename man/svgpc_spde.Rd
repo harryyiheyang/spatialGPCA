@@ -50,22 +50,27 @@ svgpc_spde_fit(model, method = c("REML", "GCV"), lambda = NULL,
 svgpc_spde_fitted(model, G, lambda, coefficients = FALSE)
 svgpc_spde_scale_audit(basis, reference_distance, model = NULL,
                      probes = 16L, block_size = 64L)
-\method{plot}{svgpc_spde_mesh}(x, show_vertices = TRUE, vertex_cex = 0.45,
-                               main = NULL, xlab = "x (km)", ylab = "y (km)", ...)
+\method{plot}{svgpc_spde_mesh}(x, show_vertices = TRUE, vertex_cex = .3,
+                               main = NULL, xlab = NULL, ylab = NULL,
+                               kappa = NULL, locations = x$locations, ...)
 }
 \arguments{
 \item{x}{An SPDE mesh to plot.}
 \item{show_vertices}{Draw dots at mesh vertices.}
-\item{vertex_cex}{Mesh-vertex dot size.}
+\item{vertex_cex}{Mesh-vertex point size in mm; the default matches GP centre size.}
 \item{main, xlab, ylab}{Plot title and axis labels.}
-\item{...}{Additional arguments to the initial graphics plot.}
+\item{...}{Reserved for S3 compatibility.}
 \item{distance}{Nonnegative distances in km; a positive scalar for scale calibration.}
-\item{kappa}{Positive inverse distance in km to the power minus one.}
+\item{kappa}{Positive inverse distance in km to the power minus one. In plot,
+supply the scale intended for fitting to draw the nominal correlation-0.1 circle;
+NULL plots the mesh and density without assuming a range.}
 \item{correlation}{Target nominal Matern correlation strictly between zero and one.}
 \item{locations}{For mesh construction, an object from \code{svgpc_spde_locations}
 or a location-by-two planar coordinate matrix in km. Geographic objects retain
 the projection needed by \code{svgpc_spde_prepare_data}. Basis construction takes
-the planar coordinate matrix.}
+the planar coordinate matrix. In plot, a location object or its locations data
+frame supplies coordinates and counts; by default these are retained by the mesh.
+For older saved meshes, supply this explicitly in the mesh's projection.}
 \item{max_area}{Maximum triangle area in square km.}
 \item{buffer}{Positive extension in km for the default rectangular boundary. Required
 even with a custom boundary, where it is metadata only and is not applied.}
@@ -127,6 +132,16 @@ stored coordinate frame without regenerating nodes or triangles. Construct the
 geographic mesh from svgpc_spde_locations(table) to retain this frame. Node count
 and triangle count are distinct and are shown by print and plot. Changing PC count
 never changes the full spectrum or all-SNP information used for lambda selection.
+
+Mesh plots draw one map with the same density grid, colours and small-node styling
+as GP. The heatmap uses log1p-transformed smoothed location counts, not mesh-node density; planar matrix
+inputs have unit counts. For supplied kappa, the circle solves
+(kappa*d) K1(kappa*d) = 0.1 and is centred at the density-grid peak. It is a nominal
+Matern reference, not a fitted influence region or hard cutoff. Geographic maps
+show the full buffered mesh as well as the study area.
+Plot returns one ggplot invisibly, with a range_circle attribute containing
+radius, centre and xy in projected km. Its path contains Lon/Lat in degrees for
+geographic input, or x/y in km for planar input.
 
 Accumulation returns a new model list: always assign the returned value. All SNPs
 share one lambda and variance scale. A prepared list can be reused for independent

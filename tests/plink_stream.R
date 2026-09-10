@@ -60,11 +60,11 @@ pdf(tempfile(fileext = ".pdf"), width = 13, height = 5)
 p1 <- plot(cls)
 cls$rho <- 40
 p2 <- plot(cls)
-stopifnot(identical(p1$correlation$data$distance, p2$correlation$data$distance))
-stopifnot(max(abs(p2$correlation$data$correlation - exp(-p2$correlation$data$distance / 40))) == 0)
+stopifnot(identical(p1$data, p2$data))
+stopifnot(abs(exp(-attr(p2, "range_circle")$radius / 40) - .1) < 1e-12)
 fit$rho <- 60
 p3 <- plot(fit)
-stopifnot(max(abs(p3$correlation$data$correlation - exp(-p3$correlation$data$distance / 60))) == 0)
+stopifnot(abs(exp(-attr(p3, "range_circle")$radius / 60) - .1) < 1e-12)
 dev.off()
 stopifnot(!("lambda" %in% names(cls)), !("lambda" %in% names(formals(svgpc_fit))),
           !("conditioning" %in% names(formals(svgpc_prepare))), !("intercept" %in% names(formals(svgpc_prepare))))
