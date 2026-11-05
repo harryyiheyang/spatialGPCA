@@ -105,7 +105,7 @@ On a cluster, build on the same node type the jobs run on.
 **Lambda steps.** Each scan predicts the REML gain of the lambda step from the grid parabola. Lambda
 is held when that gain is below `tol`. The REML is flat in lambda near its optimum (on 7M_1, lambda
 from 2.5e8 to 2.8e8 changes the REML by about 0.01). Without the hold, lambda wanders there and
-restarts the Krylov history. Convergence requires dREML and the predicted gain both below tol x |REML| (tol = 1e-4 is relative), and a U subspace change below 1e-3. On 7M_1 that ends at scan 9 instead of 11; the extra scans only moved the REML in its 8th significant digit.
+restarts the Krylov history. Convergence requires dREML and the predicted gain both below tol x |REML| (tol = 1e-7 is relative, as in mgcv), and a U subspace change below 1e-3. On 7M_1 that ends at scan 9 instead of 11; the extra scans only moved the REML in its 8th significant digit.
 
 **Warm start (`warm`, default off).** `warm = 10` first fits on every 10th variant. On 7M_1 it did
 not reduce the number of full scans, because the subset optimum of U and lambda differs from the
