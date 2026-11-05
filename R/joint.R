@@ -226,7 +226,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U_init = NULL, lambda = NULL,
-                            max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L, warm = 1L, cache_gb = 8,
+                            max_iter = 30L, tol = 1e-4, v_scans = 1L, krylov = 4L, warm = 1L, cache_gb = 8,
                             block_size = NULL, threads = 0L, kernel = c("auto", "fused", "cpp", "blas"),
                             seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
@@ -346,7 +346,8 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         # on lambda) and makes lambda wander. The held step is applied at the end.
         gain <- res$reml[ic] - min(fmin, min(res$reml))
         eta_prop <- eta
-        if (gain < tol) eta <- eta_old
+        atol <- tol * max(1, abs(res$reml[ic]))  # tol is relative to |REML|
+        if (gain < atol) eta <- eta_old
         YV <- qr.Q(qr(res$aV$Y))
         if (k) YP <- qr.Q(qr(res$aP$Y))
         change <- NA_real_
@@ -379,7 +380,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                                     seconds = proc.time()[[3L]] - t0)
         if (verbose) message(sprintf("scan %d: lambda=%.4g REML=%.8g dREML=%.2e Uchange=%.2e (%.1fs)",
                                      iter, lams[ic], V_now, dV, change, proc.time()[[3L]] - t0))
-        if (!is.na(dV) && dV < tol && gain < tol) { converged <- TRUE; break }
+        if (!is.na(dV) && dV < atol && gain < atol && (is.na(change) || change < 1e-3)) { converged <- TRUE; break }
         if (iter >= max_iter) break
     }
     # Final scans at fixed U and lambda: V and its U-orthogonal version by subspace iteration.
