@@ -41,16 +41,29 @@ tests check V against the dense formula and its U-gradient by finite differences
 
 Each scan evaluates V exactly at a small lambda grid (one extra sparse solve per
 grid point, symbolic factorization reused): the lambda step is exact 1-D
-minimization of V. The U step solves the stationarity equation of V in U,
-`U A'A = R0 A - (L/(N-q)) [(C - ZBH) G^-1 - C (C'C)^-1]_U`, with over-relaxation;
-the next scan's V rejects and backtracks any step that does not decrease V, so
-V decreases monotonically over accepted steps. There is no second criterion:
-no location-level REML, no alternation between different objectives.
+minimization of V.
 
-Initialization is spatial first: scans with intercept only estimate lambda and
-run subspace iteration on `X - 1 mu' - Z B Theta`, whose top k Ritz vectors
-start U. `init = "table"` starts from the first k covariate columns of the
-table (the two-stage solution) for comparison; compare `fit$reml`.
+**U given lambda has a closed form (no backfitting).** Profiling (mu, A, Theta)
+integrates the smooth field out: with `Omega^-1 = I - ZB S^-1 B'Z'` (Woodbury,
+sparse) and `X_c` the GLS-centred genotypes, the penalized RSS is minimized by
+the top k solutions of the generalized eigenproblem
+
+```
+X_c X_c' Omega^-1 U = U D,   U' Omega^-1 U = I     (Eckart-Young in the Omega^-1 metric)
+```
+
+computed by block subspace iteration with k + 10 columns: each scan forms
+`X_c' Omega^-1 Y` and `X_c (X_c' Omega^-1 Y)` block by block (two GEMMs per
+block, no per-SNP sparse solves) followed by Rayleigh-Ritz. The rate depends on
+the eigengap of the whitened data, not on the concurvity between U and the
+field. This U ignores the O(1) term `log|G| - log|C'C|` of V, whose effect on U
+is O(1/N); V itself, including that term, is what lambda minimizes and what the
+trace reports. Columns of U beyond the real structure sit in the noise bulk and
+keep rotating slowly; convergence is declared on the change of V and lambda.
+
+The first scan uses the intercept only and a random basis; `init = "table"`
+starts the basis from the first k covariate columns (e.g. plink PCs), and
+`U_init` from any N x k matrix.
 After convergence, `v_scans` scans at fixed U and lambda compute V, the
 W-principal components of `F = B Theta`, by subspace iteration, and U is
 rotated by the eigenvectors of `A'A`.

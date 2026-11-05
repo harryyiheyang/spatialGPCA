@@ -59,7 +59,7 @@ stopifnot(max(abs(sol[-(1:(k + 1)), 1:5] - th_old)) < 1e-6 * max(abs(th_old)))
 # 1b. The U proposal is a stationary point condition of the REML: finite-difference check of
 #     the gradient at the proposal's defining equation, through the closed form below.
 U0 <- Utrue + matrix(rnorm(N * k, sd = .3), N)
-r0 <- sc(model, reader, p, 64L, U0, 3, 1L)
+r0 <- sc(model, reader, p, 64L, U0, 3, 1L, update_U = TRUE)
 grad_fd <- function(U, i, j, h = 1e-5) {
     Up <- U; Up[i, j] <- Up[i, j] + h; Um <- U; Um[i, j] <- Um[i, j] - h
     (dense_reml(Up, 3) - dense_reml(Um, 3)) / (2 * h)
@@ -72,7 +72,7 @@ for (ij in list(c(1, 1), c(17, 2), c(400, 1))) {
 }
 
 # 2. U varying within locations: objective equals the dense individual-level minimum.
-res2 <- sc(model, reader, p, 50L, Utrue, lams[2], 1L)
+res2 <- sc(model, reader, p, 50L, Utrue, lams[2], 1L, update_U = TRUE)
 C <- cbind(1, Utrue); ZB <- B[s, ]
 M <- rbind(cbind(crossprod(C), crossprod(C, ZB)), cbind(crossprod(ZB, C), crossprod(ZB) + lams[2] * Q))
 rhs <- rbind(crossprod(C, X), crossprod(ZB, X))
@@ -82,12 +82,23 @@ stopifnot(abs(res2$objective - dense) / dense < 1e-9)
 sol <- solve(M, rhs); A <- t(sol[2:3, ]); R <- X - matrix(1, N, 1) %*% sol[1, , drop = FALSE] - ZB %*% sol[-(1:3), ]
 stopifnot(max(abs(res2$Uacc - R %*% A)) < 1e-8 * max(abs(res2$Uacc)))
 
+# 2b. Subspace iteration converges to the dense generalized eigenproblem X_c X_c' Om^-1 U = U D.
+lam <- 3; Si <- solve(crossprod(ZB) + lam * Q)
+Om <- diag(N) - ZB %*% Si %*% t(ZB)
+o1 <- Om %*% rep(1, N); P1 <- diag(N) - outer(rep(1, N), drop(o1)) / sum(o1)
+Xc <- P1 %*% X
+eo <- eigen(Om, symmetric = TRUE); Oh <- eo$vectors %*% (sqrt(pmax(eo$values, 0)) * t(eo$vectors))
+Ud <- svd(Oh %*% Xc, nu = k)$u
+YS <- matrix(rnorm(N * 8), N)
+for (it in 1:40) { rr <- sc(model, reader, p, 100L, matrix(0, N, 0), lam, 1L, YS = YS); YS <- rr$sub$next_basis }
+Ur <- Oh %*% rr$sub$ritz[, 1:k]
+stopifnot(min(svd(crossprod(qr.Q(qr(Ur)), Ud))$d) > 1 - 1e-6)
+
 # 3. Joint fit: monotone objective at fixed lambda, recovers U and finds a finite lambda.
 fit <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, max_iter = 60)
 tr <- fit$trace
 stopifnot(all(is.finite(tr$reml)), fit$lambda > 0, is.finite(fit$lambda))
-acc <- tr$reml[tr$step == "accepted"]
-stopifnot(all(diff(acc) <= 1e-8 * abs(acc[-1])))
+stopifnot(tail(tr$reml, 1) <= min(tr$reml[-1]) + 1e-6)
 cc <- cancor(fit$U, Utrue)$cor
 stopifnot(min(cc) > .9)
 Vi <- fit$V[s, ]
