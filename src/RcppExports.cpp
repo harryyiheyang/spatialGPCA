@@ -179,6 +179,28 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cpp_joint_bed_scan
+Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerVector rows, int start, int count, const arma::vec& af, Rcpp::IntegerVector location, int n, const arma::mat& Yt, int q, Rcpp::NumericMatrix RtT, int threads);
+RcppExport SEXP _spatialGPCA_cpp_joint_bed_scan(SEXP pathSEXP, SEXP file_samplesSEXP, SEXP rowsSEXP, SEXP startSEXP, SEXP countSEXP, SEXP afSEXP, SEXP locationSEXP, SEXP nSEXP, SEXP YtSEXP, SEXP qSEXP, SEXP RtTSEXP, SEXP threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type path(pathSEXP);
+    Rcpp::traits::input_parameter< int >::type file_samples(file_samplesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< int >::type start(startSEXP);
+    Rcpp::traits::input_parameter< int >::type count(countSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type af(afSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type location(locationSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Yt(YtSEXP);
+    Rcpp::traits::input_parameter< int >::type q(qSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type RtT(RtTSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_joint_bed_scan(path, file_samples, rows, start, count, af, location, n, Yt, q, RtT, threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // cpp_cluster
 Rcpp::List cpp_cluster(const arma::mat& xy, int m, int seed);
 RcppExport SEXP _spatialGPCA_cpp_cluster(SEXP xySEXP, SEXP mSEXP, SEXP seedSEXP) {
@@ -286,6 +308,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_spatialGPCA_cpp_joint_aggregate", (DL_FUNC) &_spatialGPCA_cpp_joint_aggregate, 4},
     {"_spatialGPCA_cpp_joint_crossprod", (DL_FUNC) &_spatialGPCA_cpp_joint_crossprod, 3},
     {"_spatialGPCA_cpp_joint_prod", (DL_FUNC) &_spatialGPCA_cpp_joint_prod, 3},
+    {"_spatialGPCA_cpp_joint_bed_scan", (DL_FUNC) &_spatialGPCA_cpp_joint_bed_scan, 12},
     {"_spatialGPCA_cpp_cluster", (DL_FUNC) &_spatialGPCA_cpp_cluster, 3},
     {"_spatialGPCA_cpp_prepare", (DL_FUNC) &_spatialGPCA_cpp_prepare, 5},
     {"_spatialGPCA_cpp_spde_project", (DL_FUNC) &_spatialGPCA_cpp_spde_project, 3},

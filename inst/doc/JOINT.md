@@ -81,3 +81,24 @@ Kappa is fixed per fit; compare `fit$reml` over 3-5 candidate kappas.
 Block-coordinate descent converges slowly when U and the smooth field are
 nearly collinear (`fit$concurvity` is the condition number of G); in that
 regime check the trace and raise `max_iter`.
+
+## Kernels and speed
+
+With a PLINK BED input the default kernel is `"fused"` (`cpp_joint_bed_scan`). It works on the 2-bit
+codes directly and never forms an N x block double matrix. For each SNP it adds rows of
+`Y = [C, Omega^-1 Y_s]` into three genotype-class sums, which gives `X'Y`, the location sums and
+`x'x` in one pass. A second pass over chunks of individuals adds `X T` from per-SNP lookup tables
+`lut[code] * T_j`. Both passes use OpenMP: SNP groups x individual chunks for the first, individual
+chunks for the second. At N = 200k, 2048 SNPs and 32 columns on 4 cores, this is 2x faster than
+decoding plus the C++ products. The `"cpp"` and `"blas"` kernels remain for custom readers.
+
+These loops are plain C++, so the compiler flags matter. Building with `-O3 -march=native` roughly
+halves the time again (AVX2/AVX-512). This does not need a change to the global R configuration:
+
+```
+printf 'CXXFLAGS = -O3 -march=native\nCXX17FLAGS = -O3 -march=native\n' > /tmp/Makevars.fast
+R_MAKEVARS_USER=/tmp/Makevars.fast R CMD INSTALL spatialGPCA
+```
+
+On a cluster, build on the same node type the jobs run on.
+

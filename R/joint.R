@@ -80,7 +80,10 @@ print.svgpc_joint_model <- function(x, ...) {
 # One pass over all SNPs at fixed U and a small lambda grid.
 .joint_scan <- function(model, reader, p, block, U, lambdas, center,
                         update_U = FALSE, YU = NULL, YV = NULL, YP = NULL, fac0 = NULL, threads = 0L,
-                        YS = NULL, use_blas = FALSE) {
+                        YS = NULL, use_blas = FALSE, bedscan = NULL) {
+    # bedscan(start, end, Yt, q, RtT): fused 2-bit kernel returning location sums, x'x and X'Y and
+    # adding (X T)' into RtT in place; no N x block double matrix is formed.
+    if (!is.null(bedscan) && (update_U || !is.null(YU))) stop("The fused kernel does not support update_U or YU")
     s <- model$location; w <- model$counts; B <- model$B; N <- model$N; n <- model$n; m <- model$m
     C <- cbind(1, U)
     q <- ncol(C); k <- q - 1L
@@ -120,15 +123,24 @@ print.svgpc_joint_model <- function(x, ...) {
     aU <- acc(YU); aV <- acc(YV); aP <- acc(YP)
     if (!is.null(YP)) Pcoef <- solve(CbWCb, t(ZtC))
     sw <- sqrt(w)
+    if (!is.null(bedscan)) {
+        Yt <- t(if (is.null(YS)) C else cbind(C, Y1))
+        RtT <- if (is.null(YS)) matrix(0, 0L, N) else matrix(0, ncol(YS), N)
+    }
     for (st in seq(1L, p, by = block)) {
         en <- min(p, st + block - 1L)
-        X <- reader(st, en)
-        if (nrow(X) != N || ncol(X) != en - st + 1L) stop("Reader returned a block of the wrong size")
-        ag <- cpp_joint_aggregate(X, s, n, threads)
+        if (!is.null(bedscan)) {
+            ag <- bedscan(st, en, Yt, q, RtT)
+            XtW <- ag$XtY
+        } else {
+            X <- reader(st, en)
+            if (nrow(X) != N || ncol(X) != en - st + 1L) stop("Reader returned a block of the wrong size")
+            ag <- cpp_joint_aggregate(X, s, n, threads)
+            # One threaded pass over the block for C'X and X'(P1' Omega^-1 Y).
+            XtW <- if (use_blas) crossprod(X, if (is.null(YS)) C else cbind(C, Y1)) else
+                cpp_joint_crossprod(X, if (is.null(YS)) C else cbind(C, Y1), threads)
+        }
         zb <- as.matrix(Matrix::crossprod(B, ag$sums))
-        # One threaded pass over the block for C'X and X'(P1' Omega^-1 Y).
-        XtW <- if (use_blas) crossprod(X, if (is.null(YS)) C else cbind(C, Y1)) else
-            cpp_joint_crossprod(X, if (is.null(YS)) C else cbind(C, Y1), threads)
         CtX <- t(XtW[, seq_len(q), drop = FALSE])
         for (i in seq_len(g)) {
             t_i <- as.matrix(Matrix::solve(facs[[i]], zb))
@@ -142,7 +154,7 @@ print.svgpc_joint_model <- function(x, ...) {
         F <- as.matrix(B %*% theta)
         if (!is.null(YS)) {
             Tb <- XtW[, -seq_len(q), drop = FALSE]
-            Racc <- Racc + if (use_blas) X %*% Tb else cpp_joint_prod(X, Tb, threads)
+            if (is.null(bedscan)) Racc <- Racc + if (use_blas) X %*% Tb else cpp_joint_prod(X, Tb, threads)
             Tacc <- Tacc + crossprod(Tb)
         }
         if (k) {
@@ -170,8 +182,9 @@ print.svgpc_joint_model <- function(x, ...) {
             M <- crossprod(Ft, YP)
             aP$Y <- aP$Y + Ft %*% M; aP$T <- aP$T + crossprod(M)
         }
-        total <- total + ncol(X)
+        total <- total + en - st + 1L
     }
+    if (!is.null(bedscan) && !is.null(YS)) Racc <- t(RtT)
     # One objective for U and lambda: individual-level REML with C = [1, U] as the fixed design,
     # sigma^2 profiled, divided by p. -log|C'C| makes it invariant to U -> U T + 1 v'.
     df <- N - q
@@ -214,7 +227,7 @@ print.svgpc_joint_model <- function(x, ...) {
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U_init = NULL, lambda = NULL,
                             max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L,
-                            block_size = NULL, threads = 0L, kernel = c("auto", "cpp", "blas"),
+                            block_size = NULL, threads = 0L, kernel = c("auto", "fused", "cpp", "blas"),
                             seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
     start_time <- proc.time()[[3L]]
@@ -222,20 +235,27 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     kernel <- match.arg(kernel)
     # Tall-skinny products: optimized BLAS when R is linked to one, else threaded C++ kernels
     # (R's reference BLAS, the Windows default, is single-threaded and unblocked).
+    # A PLINK BED input defaults to the fused 2-bit kernel, which never forms double genotype blocks.
+    if (kernel == "auto" && is.null(reader)) kernel <- "fused"
+    if (kernel == "fused" && !is.null(reader)) stop("kernel = 'fused' reads the BED file directly; drop reader")
     use_blas <- if (kernel == "auto") grepl("openblas|mkl|accelerate|blis|flexiblas|atlas",
         tolower(paste(extSoftVersion()[["BLAS"]], La_library()))) else kernel == "blas"
     N <- model$N; s <- model$location; w <- model$counts
+    bedscan <- NULL
     if (is.null(reader)) {
         bed <- .joint_bed(model$spatial, frequencies)
         snps <- bed$snps
         reader <- function(st, en) cpp_joint_bed_block(bed$path, bed$file_samples, bed$rows,
                                                        st - 1L, en - st + 1L, bed$af, as.integer(threads))
+        if (kernel == "fused") bedscan <- function(st, en, Yt, q, RtT)
+            cpp_joint_bed_scan(bed$path, bed$file_samples, bed$rows, st - 1L, en - st + 1L, bed$af,
+                               s, model$n, Yt, q, RtT, as.integer(threads))
     } else {
         if (!is.function(reader)) stop("reader must be function(start, end) returning N x block standardized genotypes")
         snps <- .positive_integer(snps, "snps")
     }
     p <- snps
-    if (is.null(block_size)) block_size <- max(16L, min(1024L, as.integer(2e7 / N)))
+    if (is.null(block_size)) block_size <- if (kernel == "fused") 256L else max(16L, min(1024L, as.integer(2e7 / N)))
     block_size <- .positive_integer(block_size, "block_size")
     k <- as.integer(k); r <- as.integer(r)
     if (k < 0L || r < 1L) stop("k must be nonnegative and r positive")
@@ -274,7 +294,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         lams <- exp(eta + offsets); ic <- which(offsets == 0)
         res <- .joint_scan(model, reader, p, block_size, U, lams, ic,
                            YV = YV, YP = if (k) YP, YS = YS, fac0 = fac0, threads = as.integer(threads),
-                           use_blas = use_blas)
+                           use_blas = use_blas, bedscan = bedscan)
         fac0 <- res$fac0
         V_now <- res$reml[ic]
         j <- which.min(res$reml); eta_old <- eta
@@ -340,7 +360,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         res <- .joint_scan(model, reader, p, block_size, U, lam, 1L,
                            update_U = FALSE,
                            YV = YV, YP = YP, fac0 = fac0, threads = as.integer(threads),
-                           use_blas = use_blas)
+                           use_blas = use_blas, bedscan = bedscan)
         if (verbose) message(sprintf("V scan %d: REML=%.6g (%.1fs)", v, res$reml, proc.time()[[3L]] - t0))
         if (v < v_scans) { YV <- qr.Q(qr(res$aV$Y)); YP <- qr.Q(qr(res$aP$Y)) }
     }
@@ -361,7 +381,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                 objective = res$objective, kappa = model$kappa, k = ncol(U), p = res$p,
                 concurvity = res$concurvity, converged = converged,
                 trace = do.call(rbind, trace), block_size = block_size,
-                kernel = if (use_blas) "blas" else "cpp",
+                kernel = if (kernel == "fused") "fused" else if (use_blas) "blas" else "cpp",
                 seconds = proc.time()[[3L]] - start_time)
     class(out) <- "svgpc_joint_fit"
     out

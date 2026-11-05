@@ -126,3 +126,34 @@ for (j in 1:20) for (ii in seq_along(rows)) {
 f1 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "cpp", max_iter = 8)
 f2 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "blas", max_iter = 8)
 stopifnot(abs(f1$reml - f2$reml) < 1e-8 * abs(f1$reml), abs(log(f1$lambda / f2$lambda)) < 1e-8)
+
+# 6. Fused 2-bit BED kernel: same scan statistics and the same fit as decoding to doubles.
+dir <- tempfile("jointbed"); dir.create(dir); prefix <- file.path(dir, "sim")
+pb <- 120; afb <- runif(pb, .05, .5)
+G <- sapply(afb, function(f) rbinom(N, 2, f))
+G[sample(length(G), 200)] <- NA
+code <- ifelse(is.na(G), 1L, ifelse(G == 2, 0L, ifelse(G == 1, 2L, 3L)))  # dosage of A1 = COUNTED
+strideb <- ceiling(N / 4); bytes <- raw(0)
+for (j in seq_len(pb)) {
+    cj <- c(code[, j], integer(4 * strideb - N))
+    bytes <- c(bytes, as.raw(colSums(matrix(cj, 4) * c(1L, 4L, 16L, 64L))))
+}
+writeBin(c(as.raw(c(0x6c, 0x1b, 0x01)), bytes), paste0(prefix, ".bed"))
+write.table(cbind(table$FID, table$IID, 0, 0, 0, -9), paste0(prefix, ".fam"), quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(1, paste0("rs", 1:pb), 0, 1:pb, "A", "G"), paste0(prefix, ".bim"), quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(data.frame(`#CHROM` = 1, ID = paste0("rs", 1:pb), REF = "G", ALT = "A", ALT_FREQS = afb, check.names = FALSE),
+            paste0(prefix, ".afreq"), quote = FALSE, row.names = FALSE, sep = "\t")
+mb <- svgpc_joint_prepare(mesh, table, kappa, bed = prefix)
+bd <- spatialGPCA:::.joint_bed(mb$spatial, NULL)
+rd <- function(a, b) spatialGPCA:::cpp_joint_bed_block(bd$path, bd$file_samples, bd$rows, a - 1L, b - a + 1L, bd$af, 2L)
+bs <- function(a, b, Yt, q, RtT) spatialGPCA:::cpp_joint_bed_scan(bd$path, bd$file_samples, bd$rows, a - 1L, b - a + 1L,
+                                                                  bd$af, mb$location, mb$n, Yt, q, RtT, 2L)
+Uq <- matrix(rnorm(N * 2), N); YSq <- matrix(rnorm(N * 5), N); YVq <- qr.Q(qr(matrix(rnorm(mb$n * 4), mb$n)))
+r1 <- sc(mb, rd, pb, 50L, Uq, lams, 2L, YS = YSq, YV = YVq, YP = YVq)
+r2 <- sc(mb, NULL, pb, 50L, Uq, lams, 2L, YS = YSq, YV = YVq, YP = YVq, bedscan = bs)
+stopifnot(max(abs(r1$reml - r2$reml)) < 1e-8, max(abs(r1$sub$next_basis - r2$sub$next_basis)) < 1e-8 * max(abs(r1$sub$next_basis)),
+          max(abs(r1$aV$Y - r2$aV$Y)) < 1e-8 * max(abs(r1$aV$Y)), max(abs(r1$aP$Y - r2$aP$Y)) < 1e-8 * max(abs(r1$aP$Y)))
+fb1 <- svgpc_joint_fit(mb, k = 2, r = 3, verbose = FALSE, max_iter = 8, threads = 2)
+fb2 <- svgpc_joint_fit(mb, k = 2, r = 3, reader = rd, snps = pb, verbose = FALSE, max_iter = 8, kernel = "cpp", threads = 2)
+stopifnot(fb1$kernel == "fused", abs(fb1$reml - fb2$reml) < 1e-8 * abs(fb1$reml), abs(log(fb1$lambda / fb2$lambda)) < 1e-8)
+cat("fused kernel checks passed\n")
