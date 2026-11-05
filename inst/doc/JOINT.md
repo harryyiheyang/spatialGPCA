@@ -102,9 +102,18 @@ R_MAKEVARS_USER=/tmp/Makevars.fast R CMD INSTALL spatialGPCA
 
 On a cluster, build on the same node type the jobs run on.
 
-**Warm start (`warm = 10`).** In the first local run (20k SNPs, N = 487k), the first 9 of 14 scans
-went to large moves of lambda (1e5 → 4.6e9 → 2.5e8), and Krylov only helps once lambda settles. The
-fit therefore first runs on every 10th variant (1/10 of the cost per scan), then starts the full
-fit from that U and lambda. `snps` also accepts a vector of variant indices, e.g. an LD-pruned set,
-read by the fused kernel with one seek per contiguous run.
+**Lambda steps.** Each scan predicts the REML gain of the lambda step from the grid parabola. Lambda
+is held when that gain is below `tol`. The REML is flat in lambda near its optimum (on 7M_1, lambda
+from 2.5e8 to 2.8e8 changes the REML by about 0.01). Without the hold, lambda wanders there and
+restarts the Krylov history. Convergence requires both dREML < tol and a predicted gain < tol.
 
+**Warm start (`warm`, default off).** `warm = 10` first fits on every 10th variant. On 7M_1 it did
+not reduce the number of full scans, because the subset optimum of U and lambda differs from the
+full one, so it is off by default. `snps` also accepts a vector of variant indices, e.g. an
+LD-pruned set, read by the fused kernel with one seek per contiguous run.
+
+**Fused kernel layout.** Phase 1a runs over SNPs and computes the location sums and x'x. Phase 1b runs
+over chunks of 256 individuals and computes X'Y with thread-private accumulators, so each Yt chunk
+stays in cache across all SNPs of a block. Phase 2 runs over chunks of individuals and computes
+X T. Y memory traffic is one pass per block instead of one pass per SNP, which was the bandwidth
+limit behind about 4 busy cores out of 28.

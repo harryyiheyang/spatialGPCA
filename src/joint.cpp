@@ -186,24 +186,42 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
   arma::mat S(n, count, arma::fill::zeros), XtY(count, c);
   arma::vec ssj(count);
   const double *yt = Yt.memptr();
-  // Phase 1 is tiled: SNPs in groups of 16 per task, individuals in chunks of 512, so a chunk of Yt
-  // stays in cache across the group instead of streaming all of Yt once per SNP.
-  const int group = 4, ngroup = (count + group - 1) / group, rchunk = 512;
 #ifdef _OPENMP
   if (threads < 1) threads = omp_get_max_threads();
-#pragma omp parallel for num_threads(threads) schedule(dynamic, 1)
 #endif
-  for (int g = 0; g < ngroup; ++g) {
-    const int j0 = g * group, j1 = std::min(count, j0 + group), gj = j1 - j0;
-    // Sums of Y rows by genotype class (adds only); X'Y = sum over classes of lut * class sum.
-    std::vector<double> acc((size_t)gj * 3 * c, 0.0), cnt((size_t)gj * 3, 0.0);
-    for (int i0 = 0; i0 < N; i0 += rchunk) {
-      const int i1 = std::min(N, i0 + rchunk);
-      for (int j = j0; j < j1; ++j) {
+  // Phase 1a, over SNPs: location sums and x'x (one scatter-add per entry, no Y traffic).
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(threads) schedule(dynamic, 4)
+#endif
+  for (int j = 0; j < count; ++j) {
+    const unsigned char *b = bytes.data() + stride * (size_t)j;
+    const double *L = lut.data() + 4 * j;
+    double *s = S.colptr(j), nc[4] = {0, 0, 0, 0};
+    for (int i = 0; i < N; ++i) {
+      const int code = (b[off[i]] >> sh[i]) & 3;
+      s[loc[i]] += L[code];
+      nc[code] += 1;
+    }
+    ssj[j] = nc[0] * L[0] * L[0] + nc[2] * L[2] * L[2] + nc[3] * L[3] * L[3];
+  }
+  // Phase 1b, over chunks of individuals: X'Y. Each thread keeps its Yt chunk in cache across all SNPs
+  // of the block and sums Y rows by genotype class into private accumulators (adds only), which are
+  // reduced at the end. Y memory traffic is one pass per block instead of one pass per SNP.
+  const int rchunk = 256, nrc = (N + rchunk - 1) / rchunk;
+  std::vector<double> acc_all((size_t)count * 3 * c, 0.0);
+#ifdef _OPENMP
+#pragma omp parallel num_threads(threads)
+#endif
+  {
+    std::vector<double> acc((size_t)count * 3 * c, 0.0);
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
+    for (int ch = 0; ch < nrc; ++ch) {
+      const int i0 = ch * rchunk, i1 = std::min(N, i0 + rchunk);
+      for (int j = 0; j < count; ++j) {
         const unsigned char *b = bytes.data() + stride * (size_t)j;
-        const double *L = lut.data() + 4 * j;
-        double *a = acc.data() + (size_t)(j - j0) * 3 * c, *nc = cnt.data() + (size_t)(j - j0) * 3;
-        double *s = S.colptr(j);
+        double *a = acc.data() + (size_t)j * 3 * c;
         for (int i = i0; i < i1; ++i) {
           const int code = (b[off[i]] >> sh[i]) & 3;
           if (code == 1) continue;
@@ -211,17 +229,17 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
           const double *y = yt + (size_t)i * c;
           double *ac = a + (size_t)cls * c;
           for (int h = 0; h < c; ++h) ac[h] += y[h];
-          s[loc[i]] += L[code];
-          nc[cls] += 1;
         }
       }
     }
-    for (int j = j0; j < j1; ++j) {
-      const double *L = lut.data() + 4 * j, *a = acc.data() + (size_t)(j - j0) * 3 * c,
-                   *nc = cnt.data() + (size_t)(j - j0) * 3;
-      for (int h = 0; h < c; ++h) XtY(j, h) = L[0] * a[h] + L[2] * a[c + h] + L[3] * a[2 * c + h];
-      ssj[j] = nc[0] * L[0] * L[0] + nc[1] * L[2] * L[2] + nc[2] * L[3] * L[3];
-    }
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+    for (size_t t = 0; t < acc.size(); ++t) acc_all[t] += acc[t];
+  }
+  for (int j = 0; j < count; ++j) {
+    const double *L = lut.data() + 4 * j, *a = acc_all.data() + (size_t)j * 3 * c;
+    for (int h = 0; h < c; ++h) XtY(j, h) = L[0] * a[h] + L[2] * a[c + h] + L[3] * a[2 * c + h];
   }
   if (l > 0) {
     // Per-SNP tables lut_j[code] * T_j (4 x l), then RtT[, i] += table_j[code_ij] over SNPs.

@@ -226,7 +226,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U_init = NULL, lambda = NULL,
-                            max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L, warm = 10L,
+                            max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L, warm = 1L,
                             block_size = NULL, threads = 0L, kernel = c("auto", "fused", "cpp", "blas"),
                             seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
@@ -326,14 +326,18 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
             st <- if (den > 0) -h * (f[3] - f[1]) / (2 * den) else 0
             eta <- eta + offsets[j] + max(-h, min(h, st))
             delta <- max(0.05, min(1, abs(eta - eta_old) * 2, delta / 2))
+            fmin <- if (den > 0) f[2] - (f[3] - f[1])^2 / (8 * den) else f[2]
         } else {
             eta <- eta + offsets[j]
             delta <- max(1, delta)
+            fmin <- res$reml[j]
         }
-        # Hold lambda when the REML step is below 1% so the Krylov history stays valid (M depends on
-        # lambda); the held step is applied at the end.
+        # Predicted REML gain of the lambda step. Lambda is held when the gain is below tol: the REML is
+        # flat in lambda near its optimum, moving it there only restarts the Krylov history (M depends
+        # on lambda) and makes lambda wander. The held step is applied at the end.
+        gain <- res$reml[ic] - min(fmin, min(res$reml))
         eta_prop <- eta
-        if (abs(eta - eta_old) < 0.01) eta <- eta_old
+        if (gain < tol) eta <- eta_old
         YV <- qr.Q(qr(res$aV$Y))
         if (k) YP <- qr.Q(qr(res$aP$Y))
         change <- NA_real_
@@ -366,7 +370,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                                     seconds = proc.time()[[3L]] - t0)
         if (verbose) message(sprintf("scan %d: lambda=%.4g REML=%.8g dREML=%.2e Uchange=%.2e (%.1fs)",
                                      iter, lams[ic], V_now, dV, change, proc.time()[[3L]] - t0))
-        if (!is.na(dV) && dV < tol && abs(eta_prop - eta_old) < 0.01) { converged <- TRUE; break }
+        if (!is.na(dV) && dV < tol && gain < tol) { converged <- TRUE; break }
         if (iter >= max_iter) break
     }
     # Final scans at fixed U and lambda: V and its U-orthogonal version by subspace iteration.
