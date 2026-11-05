@@ -127,7 +127,7 @@ f1 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = 
 f2 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "blas", max_iter = 8)
 stopifnot(abs(f1$reml - f2$reml) < 1e-8 * abs(f1$reml), abs(log(f1$lambda / f2$lambda)) < 1e-8)
 
-# 6. Fused 2-bit BED kernel: same scan statistics and the same fit as decoding to doubles.
+# 6. Fused 2-bit BED kernel (single-precision inner sums): same scan statistics and fit as decoding to doubles, to 1e-6.
 dir <- tempfile("jointbed"); dir.create(dir); prefix <- file.path(dir, "sim")
 pb <- 120; afb <- runif(pb, .05, .5)
 G <- sapply(afb, function(f) rbinom(N, 2, f))
@@ -151,11 +151,11 @@ bs <- function(a, b, Yt, q, RtT) spatialGPCA:::cpp_joint_bed_scan(bd$path, bd$fi
 Uq <- matrix(rnorm(N * 2), N); YSq <- matrix(rnorm(N * 5), N); YVq <- qr.Q(qr(matrix(rnorm(mb$n * 4), mb$n)))
 r1 <- sc(mb, rd, pb, 50L, Uq, lams, 2L, YS = YSq, YV = YVq, YP = YVq)
 r2 <- sc(mb, NULL, pb, 50L, Uq, lams, 2L, YS = YSq, YV = YVq, YP = YVq, bedscan = bs)
-stopifnot(max(abs(r1$reml - r2$reml)) < 1e-8, max(abs(r1$sub$next_basis - r2$sub$next_basis)) < 1e-8 * max(abs(r1$sub$next_basis)),
-          max(abs(r1$aV$Y - r2$aV$Y)) < 1e-8 * max(abs(r1$aV$Y)), max(abs(r1$aP$Y - r2$aP$Y)) < 1e-8 * max(abs(r1$aP$Y)))
+stopifnot(max(abs(r1$reml - r2$reml)) < 1e-6, max(abs(r1$sub$next_basis - r2$sub$next_basis)) < 1e-6 * max(abs(r1$sub$next_basis)),
+          max(abs(r1$aV$Y - r2$aV$Y)) < 1e-6 * max(abs(r1$aV$Y)), max(abs(r1$aP$Y - r2$aP$Y)) < 1e-6 * max(abs(r1$aP$Y)))
 fb1 <- svgpc_joint_fit(mb, k = 2, r = 3, verbose = FALSE, max_iter = 8, threads = 2)
 fb2 <- svgpc_joint_fit(mb, k = 2, r = 3, reader = rd, snps = pb, verbose = FALSE, max_iter = 8, kernel = "cpp", threads = 2)
-stopifnot(fb1$kernel == "fused", abs(fb1$reml - fb2$reml) < 1e-8 * abs(fb1$reml), abs(log(fb1$lambda / fb2$lambda)) < 1e-8)
+stopifnot(fb1$kernel == "fused", abs(fb1$reml - fb2$reml) < 1e-6 * abs(fb1$reml), abs(log(fb1$lambda / fb2$lambda)) < 1e-6)
 cat("fused kernel checks passed\n")
 
 # 7. Variant subsets (index vector) match a reader over the same columns; the warm start reaches the
@@ -164,7 +164,7 @@ sub <- seq(1, pb, by = 3)
 fs1 <- svgpc_joint_fit(mb, k = 2, r = 3, snps = sub, verbose = FALSE, max_iter = 6, threads = 2, warm = 1)
 rsub <- function(a, b) rd(1, pb)[, sub[a:b], drop = FALSE]
 fs2 <- svgpc_joint_fit(mb, k = 2, r = 3, reader = rsub, snps = length(sub), verbose = FALSE, max_iter = 6, kernel = "cpp", threads = 2)
-stopifnot(abs(fs1$reml - fs2$reml) < 1e-8 * abs(fs1$reml))
+stopifnot(abs(fs1$reml - fs2$reml) < 1e-6 * abs(fs1$reml))
 fw <- svgpc_joint_fit(mb, k = 2, r = 3, verbose = FALSE, max_iter = 40, threads = 2, warm = 2, tol = 1e-6)
 fc <- svgpc_joint_fit(mb, k = 2, r = 3, verbose = FALSE, max_iter = 40, threads = 2, warm = 1, tol = 1e-6)
 print(c(fw$lambda, fc$lambda, fw$reml, fc$reml)); stopifnot(!is.null(fw$warm_trace), abs(fw$reml - fc$reml) < 1e-2,

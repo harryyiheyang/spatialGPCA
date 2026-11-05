@@ -247,7 +247,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U_init = NULL, lambda = NULL,
-                            max_iter = 30L, tol = 1e-4, v_scans = 1L, krylov = 4L, warm = 1L, cache_gb = 8,
+                            max_iter = 30L, tol = 1e-4, v_scans = 1L, krylov = 4L, oversample = 6L, warm = 1L, cache_gb = 8,
                             block_size = NULL, threads = 0L, kernel = c("auto", "fused", "cpp", "blas"),
                             seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
@@ -314,7 +314,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     ell <- function(x) min(x + 10L, model$n - 1L)
     # U given lambda: generalized eigenproblem X_c X_c' Omega^-1 U = U D, solved by block subspace
     # iteration (one scan per step, oversampled by 10 columns). Lambda: exact grid minimization of V.
-    ellU <- min(k + 10L, N - 1L)
+    ellU <- min(k + as.integer(oversample), N - 1L)
     U <- matrix(0, N, 0L); YS <- NULL
     start <- NULL
     if (k) {

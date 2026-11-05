@@ -218,29 +218,40 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
   // Phase 1b, over chunks of individuals: X'Y. Each thread keeps its Yt chunk in cache across all SNPs
   // of the block and sums Y rows by genotype class into private accumulators (adds only), which are
   // reduced at the end. Y memory traffic is one pass per block instead of one pass per SNP.
+  // Mixed precision: Y and the inner sums are single precision (twice the SIMD width and half the cache
+  // traffic); each (chunk of 256 individuals, SNP) partial sum is flushed into double accumulators.
   const int rchunk = 256, nrc = (N + rchunk - 1) / rchunk;
+  std::vector<float> yf((size_t)c * N);
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(threads) schedule(static)
+#endif
+  for (int i = 0; i < N; ++i)
+    for (int h = 0; h < c; ++h) yf[(size_t)i * c + h] = (float)yt[(size_t)i * c + h];
   std::vector<double> acc_all((size_t)count * 3 * c, 0.0);
 #ifdef _OPENMP
 #pragma omp parallel num_threads(threads)
 #endif
   {
     std::vector<double> acc((size_t)count * 3 * c, 0.0);
+    std::vector<float> fa((size_t)3 * c);
 #ifdef _OPENMP
-#pragma omp for schedule(static)
+#pragma omp for schedule(dynamic, 8)
 #endif
     for (int ch = 0; ch < nrc; ++ch) {
       const int i0 = ch * rchunk, i1 = std::min(N, i0 + rchunk);
       for (int j = 0; j < count; ++j) {
         const unsigned char *b = base + stride * (size_t)j;
-        double *a = acc.data() + (size_t)j * 3 * c;
+        std::fill(fa.begin(), fa.end(), 0.0f);
         for (int i = i0; i < i1; ++i) {
           const int code = (b[off[i]] >> sh[i]) & 3;
           if (code == 1) continue;
           const int cls = code == 0 ? 0 : code - 1;  // 0: hom A1, 1: het, 2: hom A2
-          const double *y = yt + (size_t)i * c;
-          double *ac = a + (size_t)cls * c;
+          const float *y = yf.data() + (size_t)i * c;
+          float *ac = fa.data() + (size_t)cls * c;
           for (int h = 0; h < c; ++h) ac[h] += y[h];
         }
+        double *a = acc.data() + (size_t)j * 3 * c;
+        for (int h = 0; h < 3 * c; ++h) a[h] += fa[h];
       }
     }
 #ifdef _OPENMP
@@ -254,28 +265,31 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
   }
   if (l > 0) {
     // Per-SNP tables lut_j[code] * T_j (4 x l), then RtT[, i] += table_j[code_ij] over SNPs.
-    std::vector<double> tab((size_t)count * 4 * l);
+    std::vector<float> tab((size_t)count * 4 * l);
     for (int j = 0; j < count; ++j)
       for (int code = 0; code < 4; ++code)
-        for (int h = 0; h < l; ++h) tab[((size_t)j * 4 + code) * l + h] = lut[4 * j + code] * XtY(j, q + h);
+        for (int h = 0; h < l; ++h) tab[((size_t)j * 4 + code) * l + h] = (float)(lut[4 * j + code] * XtY(j, q + h));
     double *out = RtT.begin();
     const int chunk = 256, nchunk = (N + chunk - 1) / chunk;
 #ifdef _OPENMP
-#pragma omp parallel for num_threads(threads) schedule(static)
+#pragma omp parallel for num_threads(threads) schedule(dynamic, 8)
 #endif
     for (int ch = 0; ch < nchunk; ++ch) {
       const int i0 = ch * chunk, i1 = std::min(N, i0 + chunk);
+      std::vector<float> fo((size_t)(i1 - i0) * l, 0.0f);
       for (int j = 0; j < count; ++j) {
         const unsigned char *b = base + stride * (size_t)j;
-        const double *T = tab.data() + (size_t)j * 4 * l;
+        const float *T = tab.data() + (size_t)j * 4 * l;
         for (int i = i0; i < i1; ++i) {
           const int code = (b[off[i]] >> sh[i]) & 3;
           if (code == 1) continue;
-          const double *t = T + code * l;
-          double *o = out + (size_t)i * l;
+          const float *t = T + code * l;
+          float *o = fo.data() + (size_t)(i - i0) * l;
           for (int h = 0; h < l; ++h) o[h] += t[h];
         }
       }
+      for (int i = i0; i < i1; ++i)
+        for (int h = 0; h < l; ++h) out[(size_t)i * l + h] += fo[(size_t)(i - i0) * l + h];
     }
   }
   return Rcpp::List::create(Rcpp::_["sums"] = S, Rcpp::_["ss"] = arma::accu(ssj), Rcpp::_["XtY"] = XtY);

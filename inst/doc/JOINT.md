@@ -124,3 +124,11 @@ cores. When the selected variants fit in `cache_gb`, their 2-bit rows (N/4 bytes
 memory once, and later scans do no I/O. For UKB, use an LD-pruned set passed as `snps` indices:
 200k variants x 487k samples is about 24 GB.
 
+**Precision and width.** In the fused kernel, Y and the inner sums are single precision: twice the
+SIMD width and half the cache traffic. Each partial sum over 256 individuals is flushed into double
+accumulators; relative error against the double path is about 1e-7. The location sums and x'x stay
+double. The kernel uses dynamic OpenMP scheduling, because hybrid CPUs (P and E cores) stall static
+schedules. With Krylov acceleration, the oversampling of the U subspace is 6 (`oversample`), down
+from 10, which cuts the kernel width from 31 to 27 columns (+16 for the product) with no change in
+the number of scans in simulation.
+
