@@ -300,8 +300,14 @@ Rcpp::RawVector cpp_joint_bed_read(std::string path, int file_samples, Rcpp::Int
     int e = j + 1;
     while (e < count && snp[e] == snp[e - 1] + 1) ++e;
     file.seekg(3 + (std::streamoff)stride * snp[j], std::ios::beg);
-    file.read(reinterpret_cast<char *>(o + stride * (size_t)j), (std::streamsize)(stride * (size_t)(e - j)));
-    if (!file) Rcpp::stop("Truncated BED");
+    // Read in pieces of at most 512 MB: a single read of 2 GB or more fails on Windows (MinGW/UCRT).
+    size_t left = stride * (size_t)(e - j), done = 0;
+    while (left > 0) {
+      const size_t piece = std::min(left, (size_t)1 << 29);
+      file.read(reinterpret_cast<char *>(o + stride * (size_t)j + done), (std::streamsize)piece);
+      if (!file) Rcpp::stop("Truncated BED");
+      done += piece; left -= piece;
+    }
     j = e;
   }
   return out;
