@@ -64,10 +64,20 @@ svgpc_joint_prepare <- function(mesh, table, kappa, bed = NULL, tau = 1) {
     Q <- Matrix::forceSymmetric(basis$Q)
     fq <- Matrix::Cholesky(Q, perm = TRUE, LDL = FALSE)
     # For mode = "orthogonal": P_perp = I - Z Ba (Ba'W Ba)^-1 Ba'Z' over mesh vertices with data.
+    # A basis of span(Z B) is chosen by a sparse QR of W^1/2 B at the location level: columns whose
+    # pivot |R_jj| is negligible (empty or linearly dependent vertices) are dropped, so Ba'W Ba is
+    # nonsingular and the projection is exact without a ridge.
     active <- which(Matrix::colSums(abs(B)) > 0)
     Ba <- B[, active, drop = FALSE]
+    Mw <- Matrix::Diagonal(length(w), sqrt(w)) %*% Ba
+    qrM <- suppressWarnings(Matrix::qr(Mw))
+    d <- abs(Matrix::diag(Matrix::qrR(qrM, backPermute = FALSE)))
+    keep <- sort(qrM@q[d > 1e-9 * max(d)] + 1L)
+    Ba <- Ba[, keep, drop = FALSE]
     Ka <- Matrix::forceSymmetric(Matrix::crossprod(Ba, Matrix::Diagonal(length(w), w) %*% Ba))
-    fK <- Matrix::Cholesky(Ka, perm = TRUE, LDL = FALSE, Imult = 1e-10 * mean(Matrix::diag(Ka)))
+    fK <- tryCatch(Matrix::Cholesky(Ka, perm = TRUE, LDL = FALSE),
+                   error = function(e) Matrix::Cholesky(Ka, perm = TRUE, LDL = FALSE,
+                                                        Imult = 1e-10 * mean(Matrix::diag(Ka))))
     out <- list(spatial = spatial, B = B, Q = Q, BtWB = BtWB, counts = w, Ba = Ba, fK = fK,
                 location = as.integer(spatial$sample_location), N = nrow(spatial$table),
                 n = length(w), m = ncol(B), kappa = basis$kappa, tau = basis$tau,

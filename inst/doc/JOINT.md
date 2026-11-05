@@ -92,3 +92,5 @@ span(ZB), so U is also orthogonal to 1, and the problem separates exactly:
 U (randomized subspace iteration) and lambda (grid REML) advance in the same
 scans; the simulation converges in 5 scans. The mesh resolution (`max_area`)
 decides what counts as geography.
+
+**Basis of the mesh space.** `svgpc_joint_prepare()` picks a basis of span(Z B) by a sparse QR of W^1/2 B at the location level. Columns with a negligible pivot, meaning vertices with no data or linearly dependent ones, are dropped. Ba'W Ba is then nonsingular, so P⊥ is the exact projection with no ridge. The precision Q plays no part in the projection; it only enters the REML for λ.

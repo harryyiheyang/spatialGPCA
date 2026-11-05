@@ -140,3 +140,16 @@ ll <- fo$lambda * exp(c(-.05, .05))
 stopifnot(all(sapply(ll, function(l) dense_reml(fo$U, l)) > fo$reml))
 stopifnot(max(abs(crossprod(fo$U, fo$V[s, ]))) < 1e-6 * N)
 print(fo)
+
+# 7. Rank-deficient mesh space: a duplicated hat column is dropped by the sparse QR, the reduced Ba
+#    spans the same space, and Ba'W Ba factors without a ridge.
+m2 <- model
+B2 <- cbind(m2$B, m2$B[, which(colSums(abs(m2$B)) > 0)[1]])
+w2 <- m2$counts
+M2 <- Matrix::Diagonal(length(w2), sqrt(w2)) %*% B2
+q2 <- suppressWarnings(Matrix::qr(M2))
+d2 <- abs(Matrix::diag(Matrix::qrR(q2, backPermute = FALSE)))
+keep2 <- sort(q2@q[d2 > 1e-9 * max(d2)] + 1L)
+stopifnot(length(keep2) == ncol(model$Ba), Matrix::rankMatrix(as.matrix(M2)) == length(keep2))
+stopifnot(ncol(model$Ba) == Matrix::rankMatrix(as.matrix(ZB)))
+cat("rank check passed\n")
