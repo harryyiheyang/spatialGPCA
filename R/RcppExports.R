@@ -33,6 +33,14 @@ cpp_fitted <- function(ptr, G, lambda, coefficients) {
     .Call(`_spatialGPCA_cpp_fitted`, ptr, G, lambda, coefficients)
 }
 
+cpp_joint_bed_block <- function(path, file_samples, rows, start, count, af, threads) {
+    .Call(`_spatialGPCA_cpp_joint_bed_block`, path, file_samples, rows, start, count, af, threads)
+}
+
+cpp_joint_threads <- function() {
+    .Call(`_spatialGPCA_cpp_joint_threads`)
+}
+
 cpp_cluster <- function(xy, m, seed) {
     .Call(`_spatialGPCA_cpp_cluster`, xy, m, seed)
 }
