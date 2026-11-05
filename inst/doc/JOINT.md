@@ -61,36 +61,23 @@ is O(1/N); V itself, including that term, is what lambda minimizes and what the
 trace reports. Columns of U beyond the real structure sit in the noise bulk and
 keep rotating slowly; convergence is declared on the change of V and lambda.
 
+Block Krylov acceleration (`krylov = 4`): the last four iterates `Y_j` and
+their images `M Y_j` (M = X_c X_c' Omega^-1) are kept, and U is the
+Rayleigh-Ritz solution over their span. Omega^-1 M is symmetric, so the
+projected problem needs only `Omega^-1` applied to the stored iterates (sparse,
+no scan). This turns the linear rate of subspace iteration into a Krylov rate:
+in the k = 10 simulation the fixed point is reached in 17 scans instead of 91.
+Lambda is held while its REML step is under 1%, so the history stays valid,
+and the held step is applied at the end.
+
 The first scan uses the intercept only and a random basis; `init = "table"`
 starts the basis from the first k covariate columns (e.g. plink PCs), and
 `U_init` from any N x k matrix.
-After convergence, `v_scans` scans at fixed U and lambda compute V, the
-W-principal components of `F = B Theta`, by subspace iteration, and U is
+The V subspaces iterate during the main loop, so one final scan (`v_scans = 1`)
+at fixed U and lambda computes V, the W-principal components of `F = B Theta`, and U is
 rotated by the eigenvectors of `A'A`.
 
 Kappa is fixed per fit; compare `fit$reml` over 3-5 candidate kappas.
 Block-coordinate descent converges slowly when U and the smooth field are
 nearly collinear (`fit$concurvity` is the condition number of G); in that
 regime check the trace and raise `max_iter`.
-
-## mode = "orthogonal": U orthogonal to the mesh space
-
-`svgpc_joint_fit(model, mode = "orthogonal")` constrains `U'ZB = 0`: everything
-the mesh can represent belongs to the spatial field, and U holds only
-within-location ancestry differences and between-location variation finer
-than the mesh. Because the hat functions sum to one, the intercept lies in
-span(ZB), so U is also orthogonal to 1, and the problem separates exactly:
-
-- the field fit is the intercept-only SPDE model, independent of U;
-- U is the top k principal components of `P_perp X`, with
-  `P_perp = I - Z Ba (Ba'W Ba)^-1 Ba'Z'` (one sparse Cholesky on the active
-  mesh vertices, k + 10 sparse solves per scan, none per SNP);
-- `Sigma^-1 U = U`, so `log|C'Sigma^-1 C| - log|C'C|` does not involve U and the
-  REML is `(N-1-k) log((L_field(lambda) - ||U'X||^2)/(p(N-1-k))) + ...`:
-  one objective, exact in U and lambda, no alternation.
-
-U (randomized subspace iteration) and lambda (grid REML) advance in the same
-scans; the simulation converges in 5 scans. The mesh resolution (`max_area`)
-decides what counts as geography.
-
-**Basis of the mesh space.** `svgpc_joint_prepare()` picks a basis of span(Z B) by a sparse QR of W^1/2 B at the location level. Columns with a negligible pivot, meaning vertices with no data or linearly dependent ones, are dropped. Ba'W Ba is then nonsingular, so P⊥ is the exact projection with no ridge. The precision Q plays no part in the projection; it only enters the REML for λ.

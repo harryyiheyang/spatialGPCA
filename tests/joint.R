@@ -98,7 +98,7 @@ stopifnot(min(svd(crossprod(qr.Q(qr(Ur)), Ud))$d) > 1 - 1e-6)
 fit <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, max_iter = 60)
 tr <- fit$trace
 stopifnot(all(is.finite(tr$reml)), fit$lambda > 0, is.finite(fit$lambda))
-stopifnot(tail(tr$reml, 1) <= min(tr$reml[-1]) + 1e-6)
+stopifnot(tail(tr$reml, 1) <= min(tr$reml[-1]) + 1e-4, fit$reml <= min(tr$reml) + 1e-6)
 cc <- cancor(fit$U, Utrue)$cor
 stopifnot(min(cc) > .9)
 Vi <- fit$V[s, ]
@@ -126,30 +126,3 @@ for (j in 1:20) for (ii in seq_along(rows)) {
 f1 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "cpp", max_iter = 8)
 f2 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "blas", max_iter = 8)
 stopifnot(abs(f1$reml - f2$reml) < 1e-8 * abs(f1$reml), abs(log(f1$lambda / f2$lambda)) < 1e-8)
-
-# 6. mode = "orthogonal": U = top-k PCs of P_perp X (P_perp projects off span(Z B)), lambda minimizes
-#    the exact REML with C = [1, U], and U is orthogonal to the spatial PCs at individual level.
-fo <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE,
-                      mode = "orthogonal", max_iter = 40, tol = 1e-8)
-Ba <- ZB[, colSums(abs(B)) > 0]
-Pp <- diag(N) - Ba %*% solve(crossprod(Ba), t(Ba))
-Ud <- svd(Pp %*% X, nu = 2)$u
-stopifnot(min(svd(crossprod(qr.Q(qr(fo$U)), Ud))$d) > 1 - 1e-6)
-stopifnot(abs(dense_reml(fo$U, fo$lambda) - fo$reml) < 1e-6)
-ll <- fo$lambda * exp(c(-.05, .05))
-stopifnot(all(sapply(ll, function(l) dense_reml(fo$U, l)) > fo$reml))
-stopifnot(max(abs(crossprod(fo$U, fo$V[s, ]))) < 1e-6 * N)
-print(fo)
-
-# 7. Rank-deficient mesh space: a duplicated hat column is dropped by the sparse QR, the reduced Ba
-#    spans the same space, and Ba'W Ba factors without a ridge.
-m2 <- model
-B2 <- cbind(m2$B, m2$B[, which(colSums(abs(m2$B)) > 0)[1]])
-w2 <- m2$counts
-M2 <- Matrix::Diagonal(length(w2), sqrt(w2)) %*% B2
-q2 <- suppressWarnings(Matrix::qr(M2))
-d2 <- abs(Matrix::diag(Matrix::qrR(q2, backPermute = FALSE)))
-keep2 <- sort(q2@q[d2 > 1e-9 * max(d2)] + 1L)
-stopifnot(length(keep2) == ncol(model$Ba), Matrix::rankMatrix(as.matrix(M2)) == length(keep2))
-stopifnot(ncol(model$Ba) == Matrix::rankMatrix(as.matrix(ZB)))
-cat("rank check passed\n")
