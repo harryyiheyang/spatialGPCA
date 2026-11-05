@@ -33,6 +33,34 @@ cpp_fitted <- function(ptr, G, lambda, coefficients) {
     .Call(`_spatialGPCA_cpp_fitted`, ptr, G, lambda, coefficients)
 }
 
+cpp_joint_bed_block <- function(path, file_samples, rows, start, count, af, threads) {
+    .Call(`_spatialGPCA_cpp_joint_bed_block`, path, file_samples, rows, start, count, af, threads)
+}
+
+cpp_joint_threads <- function() {
+    .Call(`_spatialGPCA_cpp_joint_threads`)
+}
+
+cpp_joint_aggregate <- function(X, location, n, threads) {
+    .Call(`_spatialGPCA_cpp_joint_aggregate`, X, location, n, threads)
+}
+
+cpp_joint_crossprod <- function(X, Y, threads) {
+    .Call(`_spatialGPCA_cpp_joint_crossprod`, X, Y, threads)
+}
+
+cpp_joint_prod <- function(X, T, threads) {
+    .Call(`_spatialGPCA_cpp_joint_prod`, X, T, threads)
+}
+
+cpp_joint_bed_scan <- function(path, file_samples, rows, snp, af, location, n, Yt, q, RtT, threads, cache, cache_start) {
+    .Call(`_spatialGPCA_cpp_joint_bed_scan`, path, file_samples, rows, snp, af, location, n, Yt, q, RtT, threads, cache, cache_start)
+}
+
+cpp_joint_bed_read <- function(path, file_samples, snp) {
+    .Call(`_spatialGPCA_cpp_joint_bed_read`, path, file_samples, snp)
+}
+
 cpp_cluster <- function(xy, m, seed) {
     .Call(`_spatialGPCA_cpp_cluster`, xy, m, seed)
 }
