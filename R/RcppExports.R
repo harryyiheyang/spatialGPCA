@@ -53,8 +53,12 @@ cpp_joint_prod <- function(X, T, threads) {
     .Call(`_spatialGPCA_cpp_joint_prod`, X, T, threads)
 }
 
-cpp_joint_bed_scan <- function(path, file_samples, rows, snp, af, location, n, Yt, q, RtT, threads) {
-    .Call(`_spatialGPCA_cpp_joint_bed_scan`, path, file_samples, rows, snp, af, location, n, Yt, q, RtT, threads)
+cpp_joint_bed_scan <- function(path, file_samples, rows, snp, af, location, n, Yt, q, RtT, threads, cache, cache_start) {
+    .Call(`_spatialGPCA_cpp_joint_bed_scan`, path, file_samples, rows, snp, af, location, n, Yt, q, RtT, threads, cache, cache_start)
+}
+
+cpp_joint_bed_read <- function(path, file_samples, snp) {
+    .Call(`_spatialGPCA_cpp_joint_bed_read`, path, file_samples, snp)
 }
 
 cpp_cluster <- function(xy, m, seed) {

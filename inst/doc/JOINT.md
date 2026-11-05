@@ -117,3 +117,10 @@ over chunks of 256 individuals and computes X'Y with thread-private accumulators
 stays in cache across all SNPs of a block. Phase 2 runs over chunks of individuals and computes
 X T. Y memory traffic is one pass per block instead of one pass per SNP, which was the bandwidth
 limit behind about 4 busy cores out of 28.
+
+**Genotype cache (`cache_gb = 8`).** On 7M_1, scans were bound by disk reads: about 45 MB/s on a
+shared machine, so 20k SNPs (2.4 GB of 2-bit rows) took about 50 s per scan with only about 4 busy
+cores. When the selected variants fit in `cache_gb`, their 2-bit rows (N/4 bytes each) are read into
+memory once, and later scans do no I/O. For UKB, use an LD-pruned set passed as `snps` indices:
+200k variants x 487k samples is about 24 GB.
+

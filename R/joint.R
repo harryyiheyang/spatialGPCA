@@ -226,7 +226,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U_init = NULL, lambda = NULL,
-                            max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L, warm = 1L,
+                            max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L, warm = 1L, cache_gb = 8,
                             block_size = NULL, threads = 0L, kernel = c("auto", "fused", "cpp", "blas"),
                             seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
@@ -254,10 +254,19 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                                                        st - 1L, en - st + 1L, bed$af, as.integer(threads))
         if (kernel != "fused" && length(snps) && !identical(idx, seq_len(snps)))
             stop("A variant subset needs kernel = 'fused'")
+        # The selected variants' 2-bit rows are read into memory once when they fit in cache_gb, so
+        # scans after the first do no disk I/O (a busy or slow disk otherwise dominates a scan).
+        gcache <- raw(0)
+        if (kernel == "fused" && ceiling(bed$file_samples / 4) * snps / 2^30 <= cache_gb) {
+            t_read <- proc.time()[[3L]]
+            gcache <- cpp_joint_bed_read(bed$path, bed$file_samples, idx - 1L)
+            if (verbose) message(sprintf("Cached %d variants (%.2f GB) in %.1fs", snps,
+                                         length(gcache) / 2^30, proc.time()[[3L]] - t_read))
+        }
         if (kernel == "fused") bedscan <- function(st, en, Yt, q, RtT) {
             ii <- idx[st:en]
             cpp_joint_bed_scan(bed$path, bed$file_samples, bed$rows, ii - 1L, bed$af[ii],
-                               s, model$n, Yt, q, RtT, as.integer(threads))
+                               s, model$n, Yt, q, RtT, as.integer(threads), gcache, st - 1)
         }
     } else {
         if (!is.function(reader)) stop("reader must be function(start, end) returning N x block standardized genotypes")
@@ -374,7 +383,8 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         if (iter >= max_iter) break
     }
     # Final scans at fixed U and lambda: V and its U-orthogonal version by subspace iteration.
-    lam <- exp(eta_prop)
+    # Final lambda = the one U was solved at; the held step would change the REML by less than tol.
+    lam <- exp(eta)
     # v_scans = 0 (used by the warm start): return U and lambda only.
     if (as.integer(v_scans) < 1L) return(list(U = U, lambda = lam, trace = do.call(rbind, trace)))
     ZtC <- rowsum(cbind(1, U), s, reorder = TRUE)

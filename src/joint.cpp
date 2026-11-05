@@ -143,30 +143,41 @@ arma::mat cpp_joint_prod(const arma::mat &X, const arma::mat &T, int threads) {
 Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerVector rows,
                               Rcpp::IntegerVector snp, const arma::vec &af,
                               Rcpp::IntegerVector location, int n, const arma::mat &Yt, int q,
-                              Rcpp::NumericMatrix RtT, int threads) {
+                              Rcpp::NumericMatrix RtT, int threads,
+                              Rcpp::RawVector cache, double cache_start) {
   // snp: 0-based variant indices of this block (contiguous runs are read in one call); af: one
-  // frequency per entry of snp.
+  // frequency per entry of snp. With a nonempty cache (from cpp_joint_bed_read), the block is
+  // taken from memory at variant position cache_start of the cache instead of the file.
   const int count = snp.size();
   if (file_samples < 1 || count < 1 || (int)af.n_elem != count) Rcpp::stop("Invalid BED block request");
   const int N = rows.size(), c = Yt.n_rows, l = c - q;
   if ((int)Yt.n_cols != N || location.size() != N || q < 0 || q > c) Rcpp::stop("Nonconformable scan inputs");
   if (l > 0 && (RtT.nrow() != l || RtT.ncol() != N)) Rcpp::stop("Accumulator has the wrong shape");
   const size_t stride = ((size_t)file_samples + 3) / 4;
-  std::ifstream file(path, std::ios::binary);
-  if (!file) Rcpp::stop("Cannot open BED file");
-  unsigned char header[3];
-  file.read(reinterpret_cast<char *>(header), 3);
-  if (!file || header[0] != 0x6c || header[1] != 0x1b || header[2] != 0x01)
-    Rcpp::stop("Require a SNP-major PLINK BED file");
-  std::vector<unsigned char> bytes(stride * (size_t)count);
-  for (int j = 0; j < count;) {
-    if (snp[j] < 0) Rcpp::stop("Invalid variant index");
-    int e = j + 1;
-    while (e < count && snp[e] == snp[e - 1] + 1) ++e;
-    file.seekg(3 + (std::streamoff)stride * snp[j], std::ios::beg);
-    file.read(reinterpret_cast<char *>(bytes.data() + stride * (size_t)j), (std::streamsize)(stride * (size_t)(e - j)));
-    if (!file) Rcpp::stop("Truncated BED");
-    j = e;
+  std::vector<unsigned char> bytes;
+  const unsigned char *base;
+  if (cache.size() > 0) {
+    if (cache_start < 0 || (size_t)(cache_start + count) * stride > (size_t)cache.size())
+      Rcpp::stop("Block outside the genotype cache");
+    base = reinterpret_cast<const unsigned char *>(RAW(cache)) + stride * (size_t)cache_start;
+  } else {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) Rcpp::stop("Cannot open BED file");
+    unsigned char header[3];
+    file.read(reinterpret_cast<char *>(header), 3);
+    if (!file || header[0] != 0x6c || header[1] != 0x1b || header[2] != 0x01)
+      Rcpp::stop("Require a SNP-major PLINK BED file");
+    bytes.resize(stride * (size_t)count);
+    for (int j = 0; j < count;) {
+      if (snp[j] < 0) Rcpp::stop("Invalid variant index");
+      int e = j + 1;
+      while (e < count && snp[e] == snp[e - 1] + 1) ++e;
+      file.seekg(3 + (std::streamoff)stride * snp[j], std::ios::beg);
+      file.read(reinterpret_cast<char *>(bytes.data() + stride * (size_t)j), (std::streamsize)(stride * (size_t)(e - j)));
+      if (!file) Rcpp::stop("Truncated BED");
+      j = e;
+    }
+    base = bytes.data();
   }
   std::vector<int> r(N), loc(N);
   for (int i = 0; i < N; ++i) {
@@ -194,7 +205,7 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
 #pragma omp parallel for num_threads(threads) schedule(dynamic, 4)
 #endif
   for (int j = 0; j < count; ++j) {
-    const unsigned char *b = bytes.data() + stride * (size_t)j;
+    const unsigned char *b = base + stride * (size_t)j;
     const double *L = lut.data() + 4 * j;
     double *s = S.colptr(j), nc[4] = {0, 0, 0, 0};
     for (int i = 0; i < N; ++i) {
@@ -220,7 +231,7 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
     for (int ch = 0; ch < nrc; ++ch) {
       const int i0 = ch * rchunk, i1 = std::min(N, i0 + rchunk);
       for (int j = 0; j < count; ++j) {
-        const unsigned char *b = bytes.data() + stride * (size_t)j;
+        const unsigned char *b = base + stride * (size_t)j;
         double *a = acc.data() + (size_t)j * 3 * c;
         for (int i = i0; i < i1; ++i) {
           const int code = (b[off[i]] >> sh[i]) & 3;
@@ -255,7 +266,7 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
     for (int ch = 0; ch < nchunk; ++ch) {
       const int i0 = ch * chunk, i1 = std::min(N, i0 + chunk);
       for (int j = 0; j < count; ++j) {
-        const unsigned char *b = bytes.data() + stride * (size_t)j;
+        const unsigned char *b = base + stride * (size_t)j;
         const double *T = tab.data() + (size_t)j * 4 * l;
         for (int i = i0; i < i1; ++i) {
           const int code = (b[off[i]] >> sh[i]) & 3;
@@ -268,4 +279,30 @@ Rcpp::List cpp_joint_bed_scan(std::string path, int file_samples, Rcpp::IntegerV
     }
   }
   return Rcpp::List::create(Rcpp::_["sums"] = S, Rcpp::_["ss"] = arma::accu(ssj), Rcpp::_["XtY"] = XtY);
+}
+
+// Read the 2-bit rows of the given 0-based variants into memory once (contiguous runs in one call),
+// so later scans do no disk I/O.
+// [[Rcpp::export]]
+Rcpp::RawVector cpp_joint_bed_read(std::string path, int file_samples, Rcpp::IntegerVector snp) {
+  const size_t stride = ((size_t)file_samples + 3) / 4;
+  const int count = snp.size();
+  std::ifstream file(path, std::ios::binary);
+  if (!file) Rcpp::stop("Cannot open BED file");
+  unsigned char header[3];
+  file.read(reinterpret_cast<char *>(header), 3);
+  if (!file || header[0] != 0x6c || header[1] != 0x1b || header[2] != 0x01)
+    Rcpp::stop("Require a SNP-major PLINK BED file");
+  Rcpp::RawVector out(stride * (size_t)count);
+  unsigned char *o = reinterpret_cast<unsigned char *>(RAW(out));
+  for (int j = 0; j < count;) {
+    if (snp[j] < 0) Rcpp::stop("Invalid variant index");
+    int e = j + 1;
+    while (e < count && snp[e] == snp[e - 1] + 1) ++e;
+    file.seekg(3 + (std::streamoff)stride * snp[j], std::ios::beg);
+    file.read(reinterpret_cast<char *>(o + stride * (size_t)j), (std::streamsize)(stride * (size_t)(e - j)));
+    if (!file) Rcpp::stop("Truncated BED");
+    j = e;
+  }
+  return out;
 }
