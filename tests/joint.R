@@ -146,8 +146,8 @@ write.table(data.frame(`#CHROM` = 1, ID = paste0("rs", 1:pb), REF = "G", ALT = "
 mb <- svgpc_joint_prepare(mesh, table, kappa, bed = prefix)
 bd <- spatialGPCA:::.joint_bed(mb$spatial, NULL)
 rd <- function(a, b) spatialGPCA:::cpp_joint_bed_block(bd$path, bd$file_samples, bd$rows, a - 1L, b - a + 1L, bd$af, 2L)
-bs <- function(a, b, Yt, q, RtT) spatialGPCA:::cpp_joint_bed_scan(bd$path, bd$file_samples, bd$rows, a - 1L, b - a + 1L,
-                                                                  bd$af, mb$location, mb$n, Yt, q, RtT, 2L)
+bs <- function(a, b, Yt, q, RtT) spatialGPCA:::cpp_joint_bed_scan(bd$path, bd$file_samples, bd$rows, (a:b) - 1L,
+                                                                  bd$af[a:b], mb$location, mb$n, Yt, q, RtT, 2L)
 Uq <- matrix(rnorm(N * 2), N); YSq <- matrix(rnorm(N * 5), N); YVq <- qr.Q(qr(matrix(rnorm(mb$n * 4), mb$n)))
 r1 <- sc(mb, rd, pb, 50L, Uq, lams, 2L, YS = YSq, YV = YVq, YP = YVq)
 r2 <- sc(mb, NULL, pb, 50L, Uq, lams, 2L, YS = YSq, YV = YVq, YP = YVq, bedscan = bs)
@@ -157,3 +157,16 @@ fb1 <- svgpc_joint_fit(mb, k = 2, r = 3, verbose = FALSE, max_iter = 8, threads 
 fb2 <- svgpc_joint_fit(mb, k = 2, r = 3, reader = rd, snps = pb, verbose = FALSE, max_iter = 8, kernel = "cpp", threads = 2)
 stopifnot(fb1$kernel == "fused", abs(fb1$reml - fb2$reml) < 1e-8 * abs(fb1$reml), abs(log(fb1$lambda / fb2$lambda)) < 1e-8)
 cat("fused kernel checks passed\n")
+
+# 7. Variant subsets (index vector) match a reader over the same columns; the warm start reaches the
+#    same fixed point as a cold start.
+sub <- seq(1, pb, by = 3)
+fs1 <- svgpc_joint_fit(mb, k = 2, r = 3, snps = sub, verbose = FALSE, max_iter = 6, threads = 2, warm = 1)
+rsub <- function(a, b) rd(1, pb)[, sub[a:b], drop = FALSE]
+fs2 <- svgpc_joint_fit(mb, k = 2, r = 3, reader = rsub, snps = length(sub), verbose = FALSE, max_iter = 6, kernel = "cpp", threads = 2)
+stopifnot(abs(fs1$reml - fs2$reml) < 1e-8 * abs(fs1$reml))
+fw <- svgpc_joint_fit(mb, k = 2, r = 3, verbose = FALSE, max_iter = 40, threads = 2, warm = 2, tol = 1e-6)
+fc <- svgpc_joint_fit(mb, k = 2, r = 3, verbose = FALSE, max_iter = 40, threads = 2, warm = 1, tol = 1e-6)
+stopifnot(!is.null(fw$warm_trace), abs(log(fw$lambda / fc$lambda)) < 0.02, abs(fw$reml - fc$reml) < 1e-3 * abs(fc$reml),
+          min(cancor(fw$U, fc$U)$cor) > .99)
+cat("subset and warm-start checks passed:", nrow(fw$warm_trace), "+", nrow(fw$trace), "vs", nrow(fc$trace), "scans\n")

@@ -102,3 +102,9 @@ R_MAKEVARS_USER=/tmp/Makevars.fast R CMD INSTALL spatialGPCA
 
 On a cluster, build on the same node type the jobs run on.
 
+**Warm start (`warm = 10`).** In the first local run (20k SNPs, N = 487k), the first 9 of 14 scans
+went to large moves of lambda (1e5 → 4.6e9 → 2.5e8), and Krylov only helps once lambda settles. The
+fit therefore first runs on every 10th variant (1/10 of the cost per scan), then starts the full
+fit from that U and lambda. `snps` also accepts a vector of variant indices, e.g. an LD-pruned set,
+read by the fused kernel with one seek per contiguous run.
+

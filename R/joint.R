@@ -226,7 +226,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U_init = NULL, lambda = NULL,
-                            max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L,
+                            max_iter = 30L, tol = 1e-3, v_scans = 1L, krylov = 4L, warm = 10L,
                             block_size = NULL, threads = 0L, kernel = c("auto", "fused", "cpp", "blas"),
                             seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
@@ -244,13 +244,21 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     bedscan <- NULL
     if (is.null(reader)) {
         bed <- .joint_bed(model$spatial, frequencies)
-        # snps limits the fit to the first snps variants of the BED (quick runs).
-        snps <- if (is.null(snps)) bed$snps else min(bed$snps, .positive_integer(snps, "snps"))
+        # snps: NULL (all variants), a count (the first snps variants), or a vector of 1-based variant
+        # indices (e.g. an LD-pruned set).
+        idx <- if (is.null(snps)) seq_len(bed$snps) else if (length(snps) == 1L)
+            seq_len(min(bed$snps, .positive_integer(snps, "snps"))) else sort(unique(as.integer(snps)))
+        if (anyNA(idx) || min(idx) < 1L || max(idx) > bed$snps) stop("snps indices out of range")
+        snps <- length(idx)
         reader <- function(st, en) cpp_joint_bed_block(bed$path, bed$file_samples, bed$rows,
                                                        st - 1L, en - st + 1L, bed$af, as.integer(threads))
-        if (kernel == "fused") bedscan <- function(st, en, Yt, q, RtT)
-            cpp_joint_bed_scan(bed$path, bed$file_samples, bed$rows, st - 1L, en - st + 1L, bed$af,
+        if (kernel != "fused" && length(snps) && !identical(idx, seq_len(snps)))
+            stop("A variant subset needs kernel = 'fused'")
+        if (kernel == "fused") bedscan <- function(st, en, Yt, q, RtT) {
+            ii <- idx[st:en]
+            cpp_joint_bed_scan(bed$path, bed$file_samples, bed$rows, ii - 1L, bed$af[ii],
                                s, model$n, Yt, q, RtT, as.integer(threads))
+        }
     } else {
         if (!is.function(reader)) stop("reader must be function(start, end) returning N x block standardized genotypes")
         snps <- .positive_integer(snps, "snps")
@@ -261,6 +269,18 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     k <- as.integer(k); r <- as.integer(r)
     if (k < 0L || r < 1L) stop("k must be nonnegative and r positive")
     set.seed(seed)
+    # Warm start: fit first on every warm-th variant (1/warm of the cost per scan), then start the
+    # full fit from that U and lambda, so the large early moves of lambda happen on cheap scans.
+    warm <- as.integer(warm); wf <- NULL
+    if (!is.null(bedscan) && warm > 1L && is.null(U_init) && is.null(lambda) && k > 0L &&
+        p %/% warm >= 5L * (k + 10L)) {
+        if (verbose) message("Warm start on ", length(seq(1L, p, by = warm)), " of ", p, " variants")
+        wf <- svgpc_joint_fit(model, k = k, r = r, frequencies = frequencies, snps = idx[seq(1L, p, by = warm)],
+                              init = init, max_iter = max_iter, tol = tol, v_scans = 0L, krylov = krylov,
+                              warm = 1L, block_size = block_size, threads = threads, kernel = "fused",
+                              seed = seed, verbose = verbose)
+        U_init <- wf$U; lambda <- wf$lambda
+    }
     ell <- function(x) min(x + 10L, model$n - 1L)
     # U given lambda: generalized eigenproblem X_c X_c' Omega^-1 U = U D, solved by block subspace
     # iteration (one scan per step, oversampled by 10 columns). Lambda: exact grid minimization of V.
@@ -351,11 +371,13 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     }
     # Final scans at fixed U and lambda: V and its U-orthogonal version by subspace iteration.
     lam <- exp(eta_prop)
+    # v_scans = 0 (used by the warm start): return U and lambda only.
+    if (as.integer(v_scans) < 1L) return(list(U = U, lambda = lam, trace = do.call(rbind, trace)))
     ZtC <- rowsum(cbind(1, U), s, reorder = TRUE)
     # Keep the V_orthogonal basis inside the W-complement of [1, U-bar] at the final U.
     Kc <- qr.Q(qr(ZtC / sqrt(w)))
     YP <- qr.Q(qr(YP - Kc %*% crossprod(Kc, YP)))
-    v_scans <- max(1L, as.integer(v_scans))
+    v_scans <- as.integer(v_scans)
     for (v in seq_len(v_scans)) {
         t0 <- proc.time()[[3L]]
         res <- .joint_scan(model, reader, p, block_size, U, lam, 1L,
@@ -381,7 +403,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                 locations = model$spatial$locations, lambda = lam, reml = res$reml,
                 objective = res$objective, kappa = model$kappa, k = ncol(U), p = res$p,
                 concurvity = res$concurvity, converged = converged,
-                trace = do.call(rbind, trace), block_size = block_size,
+                trace = do.call(rbind, trace), warm_trace = wf$trace, block_size = block_size,
                 kernel = if (kernel == "fused") "fused" else if (use_blas) "blas" else "cpp",
                 seconds = proc.time()[[3L]] - start_time)
     class(out) <- "svgpc_joint_fit"
