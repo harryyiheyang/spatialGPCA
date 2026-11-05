@@ -121,3 +121,8 @@ for (j in 1:20) for (ii in seq_along(rows)) {
     g <- c(2, NA, 1, 0)[code + 1L]; if (is.na(g)) g <- 2 * af[v]
     stopifnot(abs(G[ii, j] - (g - 2 * af[v]) / sqrt(2 * af[v] * (1 - af[v]))) < 1e-12)
 }
+
+# 5. Threaded C++ kernels and BLAS give the same fit.
+f1 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "cpp", max_iter = 8)
+f2 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "blas", max_iter = 8)
+stopifnot(abs(f1$reml - f2$reml) < 1e-8 * abs(f1$reml), abs(log(f1$lambda / f2$lambda)) < 1e-8)

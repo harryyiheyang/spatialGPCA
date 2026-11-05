@@ -81,3 +81,55 @@ Rcpp::List cpp_joint_aggregate(const arma::mat &X, Rcpp::IntegerVector location,
   }
   return Rcpp::List::create(Rcpp::_["sums"] = S, Rcpp::_["ss"] = arma::accu(ss));
 }
+
+// X'Y for a tall N x b block X and tall N x l matrix Y, OpenMP over the columns of X.
+// [[Rcpp::export]]
+arma::mat cpp_joint_crossprod(const arma::mat &X, const arma::mat &Y, int threads) {
+  const arma::uword N = X.n_rows, b = X.n_cols, l = Y.n_cols;
+  if (Y.n_rows != N) Rcpp::stop("Nonconformable crossprod");
+  arma::mat Yt = Y.t();  // l x N, row i of Y contiguous
+  arma::mat out(l, b);
+#ifdef _OPENMP
+  if (threads < 1) threads = omp_get_max_threads();
+#pragma omp parallel for num_threads(threads) schedule(dynamic, 1)
+#endif
+  for (arma::uword j = 0; j < b; ++j) {
+    std::vector<double> acc(l, 0.0);
+    const double *x = X.colptr(j), *yt = Yt.memptr();
+    for (arma::uword i = 0; i < N; ++i) {
+      const double xi = x[i];
+      if (xi == 0) continue;
+      const double *yr = yt + i * l;
+      for (arma::uword c = 0; c < l; ++c) acc[c] += xi * yr[c];
+    }
+    for (arma::uword c = 0; c < l; ++c) out(c, j) = acc[c];
+  }
+  return out.t();  // b x l
+}
+
+// X T for a tall N x b block X and small b x l matrix T, OpenMP over row chunks.
+// [[Rcpp::export]]
+arma::mat cpp_joint_prod(const arma::mat &X, const arma::mat &T, int threads) {
+  const arma::uword N = X.n_rows, b = X.n_cols, l = T.n_cols;
+  if (T.n_rows != b) Rcpp::stop("Nonconformable product");
+  arma::mat Tt = T.t();  // l x b: row j of T contiguous
+  arma::mat Ot(l, N, arma::fill::zeros);
+  const arma::uword chunk = 512, nchunk = (N + chunk - 1) / chunk;
+#ifdef _OPENMP
+  if (threads < 1) threads = omp_get_max_threads();
+#pragma omp parallel for num_threads(threads) schedule(static)
+#endif
+  for (arma::uword h = 0; h < nchunk; ++h) {
+    const arma::uword i0 = h * chunk, i1 = std::min(N, i0 + chunk);
+    double *o = Ot.memptr();
+    for (arma::uword j = 0; j < b; ++j) {
+      const double *x = X.colptr(j), *t = Tt.colptr(j);
+      for (arma::uword i = i0; i < i1; ++i) {
+        const double xi = x[i];
+        double *orow = o + i * l;
+        for (arma::uword c = 0; c < l; ++c) orow[c] += xi * t[c];
+      }
+    }
+  }
+  return Ot.t();
+}

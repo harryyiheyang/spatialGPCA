@@ -45,6 +45,14 @@ cpp_joint_aggregate <- function(X, location, n, threads) {
     .Call(`_spatialGPCA_cpp_joint_aggregate`, X, location, n, threads)
 }
 
+cpp_joint_crossprod <- function(X, Y, threads) {
+    .Call(`_spatialGPCA_cpp_joint_crossprod`, X, Y, threads)
+}
+
+cpp_joint_prod <- function(X, T, threads) {
+    .Call(`_spatialGPCA_cpp_joint_prod`, X, T, threads)
+}
+
 cpp_cluster <- function(xy, m, seed) {
     .Call(`_spatialGPCA_cpp_cluster`, xy, m, seed)
 }
