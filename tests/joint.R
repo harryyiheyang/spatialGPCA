@@ -126,3 +126,17 @@ for (j in 1:20) for (ii in seq_along(rows)) {
 f1 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "cpp", max_iter = 8)
 f2 <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, kernel = "blas", max_iter = 8)
 stopifnot(abs(f1$reml - f2$reml) < 1e-8 * abs(f1$reml), abs(log(f1$lambda / f2$lambda)) < 1e-8)
+
+# 6. mode = "orthogonal": U = top-k PCs of P_perp X (P_perp projects off span(Z B)), lambda minimizes
+#    the exact REML with C = [1, U], and U is orthogonal to the spatial PCs at individual level.
+fo <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE,
+                      mode = "orthogonal", max_iter = 40, tol = 1e-8)
+Ba <- ZB[, colSums(abs(B)) > 0]
+Pp <- diag(N) - Ba %*% solve(crossprod(Ba), t(Ba))
+Ud <- svd(Pp %*% X, nu = 2)$u
+stopifnot(min(svd(crossprod(qr.Q(qr(fo$U)), Ud))$d) > 1 - 1e-6)
+stopifnot(abs(dense_reml(fo$U, fo$lambda) - fo$reml) < 1e-6)
+ll <- fo$lambda * exp(c(-.05, .05))
+stopifnot(all(sapply(ll, function(l) dense_reml(fo$U, l)) > fo$reml))
+stopifnot(max(abs(crossprod(fo$U, fo$V[s, ]))) < 1e-6 * N)
+print(fo)

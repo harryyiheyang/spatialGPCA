@@ -63,7 +63,12 @@ svgpc_joint_prepare <- function(mesh, table, kappa, bed = NULL, tau = 1) {
     BtWB <- Matrix::forceSymmetric(Matrix::crossprod(B, Matrix::Diagonal(length(w), w) %*% B))
     Q <- Matrix::forceSymmetric(basis$Q)
     fq <- Matrix::Cholesky(Q, perm = TRUE, LDL = FALSE)
-    out <- list(spatial = spatial, B = B, Q = Q, BtWB = BtWB, counts = w,
+    # For mode = "orthogonal": P_perp = I - Z Ba (Ba'W Ba)^-1 Ba'Z' over mesh vertices with data.
+    active <- which(Matrix::colSums(abs(B)) > 0)
+    Ba <- B[, active, drop = FALSE]
+    Ka <- Matrix::forceSymmetric(Matrix::crossprod(Ba, Matrix::Diagonal(length(w), w) %*% Ba))
+    fK <- Matrix::Cholesky(Ka, perm = TRUE, LDL = FALSE, Imult = 1e-10 * mean(Matrix::diag(Ka)))
+    out <- list(spatial = spatial, B = B, Q = Q, BtWB = BtWB, counts = w, Ba = Ba, fK = fK,
                 location = as.integer(spatial$sample_location), N = nrow(spatial$table),
                 n = length(w), m = ncol(B), kappa = basis$kappa, tau = basis$tau,
                 logdetQ = .chol_logdet(fq), mesh = mesh)
@@ -80,7 +85,7 @@ print.svgpc_joint_model <- function(x, ...) {
 # One pass over all SNPs at fixed U and a small lambda grid.
 .joint_scan <- function(model, reader, p, block, U, lambdas, center,
                         update_U = FALSE, YU = NULL, YV = NULL, YP = NULL, fac0 = NULL, threads = 0L,
-                        YS = NULL, use_blas = FALSE) {
+                        YS = NULL, use_blas = FALSE, ortho = FALSE) {
     s <- model$location; w <- model$counts; B <- model$B; N <- model$N; n <- model$n; m <- model$m
     C <- cbind(1, U)
     q <- ncol(C); k <- q - 1L
@@ -102,7 +107,14 @@ print.svgpc_joint_model <- function(x, ...) {
         logdetG[i] <- as.numeric(determinant(Gi[[i]], logarithm = TRUE)$modulus)
     }
     Hc <- H[[center]]; Gind <- Gi[[center]]
-    if (!is.null(YS)) {
+    if (!is.null(YS) && ortho) {
+        # U restricted to the orthogonal complement of the mesh space span(Z B).
+        pperp <- function(Y) Y - (as.matrix(model$Ba %*% as.matrix(Matrix::solve(model$fK,
+            as.matrix(Matrix::crossprod(model$Ba, rowsum(Y, s, reorder = TRUE)))))))[s, , drop = FALSE]
+        YS <- qr.Q(qr(pperp(YS)))
+        Y1 <- YS
+        Racc <- matrix(0, N, ncol(YS)); Tacc <- matrix(0, ncol(YS), ncol(YS))
+    } else if (!is.null(YS)) {
         # Omega^-1 = I - Z B S^-1 B'Z' (Woodbury): the smooth field integrated out at lambda_center.
         omega_inv <- function(Y) Y - (as.matrix(B %*% as.matrix(Matrix::solve(facs[[center]],
             as.matrix(Matrix::crossprod(B, rowsum(Y, s, reorder = TRUE)))))))[s, , drop = FALSE]
@@ -190,9 +202,9 @@ print.svgpc_joint_model <- function(x, ...) {
         # Subspace iteration for X_c X_c' Omega^-1 U = U D (U'Omega^-1 U = I), X_c = GLS-centred X.
         e <- eigen((Tacc + t(Tacc)) / 2, symmetric = TRUE)
         sub <- list(ritz = YS %*% e$vectors, values = e$values,
-                    next_basis = Racc - outer(rep(1, N), colSums(o1 * Racc) / den1))
+                    next_basis = if (ortho) pperp(Racc) else Racc - outer(rep(1, N), colSums(o1 * Racc) / den1))
     }
-    list(reml = reml, prss = prss, objective = objective, Uacc = Uacc, Uprop = Uprop, AtA = AtA, sub = sub,
+    list(reml = reml, prss = prss, logdetS = logdetS, logdetG = logdetG, objective = objective, Uacc = Uacc, Uprop = Uprop, AtA = AtA, sub = sub,
          aU = aU, aV = aV, aP = aP, p = total, fac0 = fac0,
          concurvity = if (k) kappa(Gind) else 1)
 }
@@ -211,6 +223,7 @@ print.svgpc_joint_model <- function(x, ...) {
 }
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
+                            mode = c("joint", "orthogonal"),
                             init = c("spatial", "table"), U_init = NULL, lambda = NULL,
                             max_iter = 30L, tol = 1e-3, v_scans = 3L,
                             block_size = NULL, threads = 0L, kernel = c("auto", "cpp", "blas"),
@@ -218,6 +231,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
     start_time <- proc.time()[[3L]]
     init <- match.arg(init)
+    mode <- match.arg(mode); ortho <- mode == "orthogonal"
     kernel <- match.arg(kernel)
     # Tall-skinny products: optimized BLAS when R is linked to one, else threaded C++ kernels
     # (R's reference BLAS, the Windows default, is single-threaded and unblocked).
@@ -253,7 +267,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         } else NULL
         YS <- cbind(start, matrix(stats::rnorm(N * (ellU - if (is.null(start)) 0L else ncol(start))), N))[, seq_len(ellU), drop = FALSE]
         YS <- qr.Q(qr(sweep(YS, 2L, colMeans(YS))))
-        if (!is.null(start)) U <- .orth_center(start)
+        if (!is.null(start) && !ortho) U <- .orth_center(start)
     }
     eta <- if (is.null(lambda)) log(stats::median(Matrix::diag(model$BtWB)) /
                                     stats::median(Matrix::diag(model$Q))) else log(lambda)
@@ -265,9 +279,19 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         t0 <- proc.time()[[3L]]
         offsets <- if (delta > 4) seq(-delta, delta, length.out = 9L) else delta * c(-1, -.5, 0, .5, 1)
         lams <- exp(eta + offsets); ic <- which(offsets == 0)
-        res <- .joint_scan(model, reader, p, block_size, U, lams, ic, YV = YV, YS = YS,
-                           fac0 = fac0, threads = as.integer(threads), use_blas = use_blas)
+        res <- .joint_scan(model, reader, p, block_size, if (ortho) matrix(0, N, 0L) else U, lams, ic,
+                           YV = YV, YS = YS, fac0 = fac0, threads = as.integer(threads),
+                           use_blas = use_blas, ortho = ortho)
         fac0 <- res$fac0
+        if (ortho && k) {
+            # Separable REML: L = L_field(lambda) - ||U'X||^2, with U ⊥ span(ZB) ∋ 1, so
+            # log|C'Sigma^-1 C| - log|C'C| = log(1'Sigma^-1 1) - log N does not involve U.
+            D <- sum(res$sub$values[seq_len(k)])
+            df <- N - 1 - k
+            res$reml <- df * log((res$prss - D) / (res$p * df)) + res$logdetS + res$logdetG -
+                model$m * log(lams) - model$logdetQ - log(N)
+            res$objective <- res$prss[ic] - D
+        }
         V_now <- res$reml[ic]
         j <- which.min(res$reml); eta_old <- eta
         if (j > 1L && j < length(lams)) {
@@ -310,11 +334,18 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     v_scans <- max(1L, as.integer(v_scans))
     for (v in seq_len(v_scans)) {
         t0 <- proc.time()[[3L]]
-        res <- .joint_scan(model, reader, p, block_size, U, lam, 1L, update_U = FALSE,
+        res <- .joint_scan(model, reader, p, block_size, if (ortho) matrix(0, N, 0L) else U, lam, 1L,
+                           update_U = FALSE,
                            YV = YV, YP = YP, fac0 = fac0, threads = as.integer(threads),
                            use_blas = use_blas)
         if (verbose) message(sprintf("V scan %d: REML=%.6g (%.1fs)", v, res$reml, proc.time()[[3L]] - t0))
         if (v < v_scans) { YV <- qr.Q(qr(res$aV$Y)); YP <- qr.Q(qr(res$aP$Y)) }
+    }
+    if (ortho && k) {
+        df <- N - 1 - k
+        res$reml <- df * log((res$prss - D) / (res$p * df)) + res$logdetS + res$logdetG -
+            model$m * log(lam) - model$logdetQ - log(N)
+        res$objective <- res$prss - D
     }
     rv <- .ritz(YV, res$aV, r); rp <- .ritz(YP, res$aP, r)
     V <- rv$vectors / sqrt(w); Vp <- rp$vectors / sqrt(w)
@@ -333,7 +364,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                 objective = res$objective, kappa = model$kappa, k = ncol(U), p = res$p,
                 concurvity = res$concurvity, converged = converged,
                 trace = do.call(rbind, trace), block_size = block_size,
-                kernel = if (use_blas) "blas" else "cpp",
+                kernel = if (use_blas) "blas" else "cpp", mode = mode,
                 seconds = proc.time()[[3L]] - start_time)
     class(out) <- "svgpc_joint_fit"
     out

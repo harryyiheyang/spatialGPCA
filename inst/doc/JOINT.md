@@ -72,3 +72,23 @@ Kappa is fixed per fit; compare `fit$reml` over 3-5 candidate kappas.
 Block-coordinate descent converges slowly when U and the smooth field are
 nearly collinear (`fit$concurvity` is the condition number of G); in that
 regime check the trace and raise `max_iter`.
+
+## mode = "orthogonal": U orthogonal to the mesh space
+
+`svgpc_joint_fit(model, mode = "orthogonal")` constrains `U'ZB = 0`: everything
+the mesh can represent belongs to the spatial field, and U holds only
+within-location ancestry differences and between-location variation finer
+than the mesh. Because the hat functions sum to one, the intercept lies in
+span(ZB), so U is also orthogonal to 1, and the problem separates exactly:
+
+- the field fit is the intercept-only SPDE model, independent of U;
+- U is the top k principal components of `P_perp X`, with
+  `P_perp = I - Z Ba (Ba'W Ba)^-1 Ba'Z'` (one sparse Cholesky on the active
+  mesh vertices, k + 10 sparse solves per scan, none per SNP);
+- `Sigma^-1 U = U`, so `log|C'Sigma^-1 C| - log|C'C|` does not involve U and the
+  REML is `(N-1-k) log((L_field(lambda) - ||U'X||^2)/(p(N-1-k))) + ...`:
+  one objective, exact in U and lambda, no alternation.
+
+U (randomized subspace iteration) and lambda (grid REML) advance in the same
+scans; the simulation converges in 5 scans. The mesh resolution (`max_area`)
+decides what counts as geography.
