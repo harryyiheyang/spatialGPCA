@@ -111,12 +111,13 @@ print.svgpc_joint_model <- function(x, ...) {
             as.matrix(Matrix::crossprod(B, rowsum(Y, s, reorder = TRUE)))))))[s, , drop = FALSE]
         o1 <- drop(omega_inv(matrix(1, N, 1L))); den1 <- sum(o1)
         OY <- omega_inv(YS)
-        Lg <- chol((crossprod(YS, OY) + crossprod(OY, YS)) / 2)
-        YS <- YS %*% backsolve(Lg, diag(ncol(YS))); OY <- OY %*% backsolve(Lg, diag(ncol(YS)))
+        G0 <- .tcp(YS, OY, threads, use_blas)
+        Lg <- chol((G0 + t(G0)) / 2); Li <- backsolve(Lg, diag(ncol(YS)))
+        YS <- .tmm(YS, Li, threads, use_blas); OY <- .tmm(OY, Li, threads, use_blas)
         Y1 <- OY - outer(o1, colSums(OY) / den1)
         Racc <- matrix(0, N, ncol(YS)); Tacc <- matrix(0, ncol(YS), ncol(YS))
     }
-    prss <- numeric(g); total <- 0
+    prss <- numeric(g); total <- 0; ktime <- 0
     Uacc <- if (k && update_U) matrix(0, N, k) else NULL
     AtA <- matrix(0, k, k)
     acc <- function(Y) if (is.null(Y)) NULL else list(Y = matrix(0, nrow(Y), ncol(Y)), T = matrix(0, ncol(Y), ncol(Y)))
@@ -130,7 +131,9 @@ print.svgpc_joint_model <- function(x, ...) {
     for (st in seq(1L, p, by = block)) {
         en <- min(p, st + block - 1L)
         if (!is.null(bedscan)) {
+            tk <- proc.time()[[3L]]
             ag <- bedscan(st, en, Yt, q, RtT)
+            ktime <- ktime + proc.time()[[3L]] - tk
             XtW <- ag$XtY
         } else {
             X <- reader(st, en)
@@ -202,13 +205,31 @@ print.svgpc_joint_model <- function(x, ...) {
     if (!is.null(YS)) {
         # Subspace iteration for X_c X_c' Omega^-1 U = U D (U'Omega^-1 U = I), X_c = GLS-centred X.
         e <- eigen((Tacc + t(Tacc)) / 2, symmetric = TRUE)
-        sub <- list(ritz = YS %*% e$vectors, values = e$values,
+        sub <- list(ritz = .tmm(YS, e$vectors, threads, use_blas), values = e$values,
                     next_basis = Racc - outer(rep(1, N), colSums(o1 * Racc) / den1),
                     basis = YS, omega_inv = omega_inv)
     }
     list(reml = reml, prss = prss, logdetS = logdetS, logdetG = logdetG, objective = objective, Uacc = Uacc, Uprop = Uprop, AtA = AtA, sub = sub,
-         aU = aU, aV = aV, aP = aP, p = total, fac0 = fac0,
+         aU = aU, aV = aV, aP = aP, p = total, fac0 = fac0, kernel_seconds = ktime,
          concurvity = if (k) kappa(Gind) else 1)
+}
+
+# Tall N x small products. R's reference BLAS (the Windows default) is single-threaded, so these go to
+# the threaded C++ kernels unless an optimized BLAS is linked.
+.tcp <- function(A, B, threads, blas) if (blas) crossprod(A, B) else cpp_joint_crossprod(A, B, threads)
+.tmm <- function(A, T, threads, blas) if (blas) A %*% T else cpp_joint_prod(A, T, threads)
+
+# 1 - smallest cosine of the principal angles between the centred column spans of U1 and U2, from
+# small Gram matrices only (no tall QR).
+.span_change <- function(U1, U2, threads, blas) {
+    U1 <- sweep(U1, 2L, colMeans(U1)); U2 <- sweep(U2, 2L, colMeans(U2))
+    r <- tryCatch({
+        R1 <- chol(.tcp(U1, U1, threads, blas)); R2 <- chol(.tcp(U2, U2, threads, blas))
+        Mx <- backsolve(R1, .tcp(U1, U2, threads, blas), transpose = TRUE) %*% backsolve(R2, diag(ncol(U2)))
+        1 - min(svd(Mx, nu = 0, nv = 0)$d)
+    }, error = function(e) NA_real_)
+    if (is.na(r)) r <- 1 - min(svd(crossprod(qr.Q(qr(U1)), qr.Q(qr(U2))), nu = 0, nv = 0)$d)
+    max(0, r)
 }
 
 .orth_center <- function(U) {
@@ -358,28 +379,26 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
             if (length(histV) > krylov) { histV <- histV[-1L]; histR <- histR[-1L] }
             Vall <- do.call(cbind, histV); Rall <- do.call(cbind, histR)
             OV <- res$sub$omega_inv(Vall)
-            em <- eigen(crossprod(OV, Vall), symmetric = TRUE)
+            G1 <- .tcp(OV, Vall, threads, use_blas)
+            em <- eigen((G1 + t(G1)) / 2, symmetric = TRUE)
             keep <- em$values > 1e-10 * em$values[1L]
             Wm <- em$vectors[, keep, drop = FALSE] %*% diag(1 / sqrt(em$values[keep]), sum(keep))
-            Gm <- crossprod(Wm, crossprod(OV, Rall) %*% Wm)
+            Gm <- crossprod(Wm, .tcp(OV, Rall, threads, use_blas) %*% Wm)
             eg <- eigen((Gm + t(Gm)) / 2, symmetric = TRUE)
             cf <- Wm %*% eg$vectors
-            Unew <- Vall %*% cf[, seq_len(k), drop = FALSE]
+            Unew <- .tmm(Vall, cf[, seq_len(k), drop = FALSE], threads, use_blas)
             Ueig <- eg$values[seq_len(k)] / res$p
-            if (ncol(U)) {
-                a <- qr.Q(qr(sweep(U, 2L, colMeans(U)))); b <- qr.Q(qr(sweep(Unew, 2L, colMeans(Unew))))
-                change <- 1 - min(svd(crossprod(a, b), nu = 0, nv = 0)$d)
-            }
+            if (ncol(U)) change <- .span_change(U, Unew, threads, use_blas)
             U <- Unew
-            YS <- Rall %*% cf[, seq_len(ncol(YS)), drop = FALSE]
+            YS <- .tmm(Rall, cf[, seq_len(ncol(YS)), drop = FALSE], threads, use_blas)
         }
         dV <- if (is.na(V_last)) NA_real_ else abs(V_last - V_now)
         V_last <- V_now
         trace[[iter]] <- data.frame(iter = iter, lambda = lams[ic], reml = V_now,
                                     objective = res$objective, U_change = change,
-                                    seconds = proc.time()[[3L]] - t0)
-        if (verbose) message(sprintf("scan %d: lambda=%.4g REML=%.8g dREML=%.2e Uchange=%.2e (%.1fs)",
-                                     iter, lams[ic], V_now, dV, change, proc.time()[[3L]] - t0))
+                                    seconds = proc.time()[[3L]] - t0, kernel_seconds = res$kernel_seconds)
+        if (verbose) message(sprintf("scan %d: lambda=%.4g REML=%.8g dREML=%.2e Uchange=%.2e (%.1fs, kernel %.1fs)",
+                                     iter, lams[ic], V_now, dV, change, proc.time()[[3L]] - t0, res$kernel_seconds))
         if (!is.na(dV) && dV < atol && gain < atol && (is.na(change) || change < 1e-3)) { converged <- TRUE; break }
         if (iter >= max_iter) break
     }
