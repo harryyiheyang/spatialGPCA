@@ -89,20 +89,19 @@ print.svgpc_joint_model <- function(x, ...) {
     CtC <- crossprod(C)
     CbWCb <- crossprod(Cbar, ZtC)
     g <- length(lambdas)
-    facs <- H <- Gloc <- vector("list", g)
+    facs <- H <- Gi <- vector("list", g)
     logdetS <- logdetG <- numeric(g)
     for (i in seq_len(g)) {
         S <- model$BtWB + lambdas[i] * model$Q
         if (is.null(fac0)) fac0 <- Matrix::Cholesky(S, perm = TRUE, LDL = FALSE)
         facs[[i]] <- Matrix::update(fac0, S)
         H[[i]] <- as.matrix(Matrix::solve(facs[[i]], BtWC))
-        Gloc[[i]] <- CbWCb - crossprod(BtWC, H[[i]])
+        Gi[[i]] <- CtC - crossprod(BtWC, H[[i]])
         logdetS[i] <- .chol_logdet(facs[[i]])
-        logdetG[i] <- as.numeric(determinant(Gloc[[i]], logarithm = TRUE)$modulus)
+        logdetG[i] <- as.numeric(determinant(Gi[[i]], logarithm = TRUE)$modulus)
     }
-    Hc <- H[[center]]
-    Gind <- CtC - crossprod(BtWC, Hc)
-    prss <- numeric(g); objective <- 0; total <- 0
+    Hc <- H[[center]]; Gind <- Gi[[center]]
+    prss <- numeric(g); total <- 0
     Uacc <- if (k && update_U) matrix(0, N, k) else NULL
     AtA <- matrix(0, k, k)
     acc <- function(Y) if (is.null(Y)) NULL else list(Y = matrix(0, nrow(Y), ncol(Y)), T = matrix(0, ncol(Y), ncol(Y)))
@@ -114,20 +113,17 @@ print.svgpc_joint_model <- function(x, ...) {
         X <- reader(st, en)
         if (nrow(X) != N || ncol(X) != en - st + 1L) stop("Reader returned a block of the wrong size")
         ag <- cpp_joint_aggregate(X, s, n, threads)
-        Xs <- ag$sums
-        zb <- as.matrix(Matrix::crossprod(B, Xs))
-        zc <- crossprod(Cbar, Xs)
-        xWx <- sum(Xs * Xs / w)
+        zb <- as.matrix(Matrix::crossprod(B, ag$sums))
+        CtX <- .spde_mm(C, X, transA = TRUE)
         for (i in seq_len(g)) {
             t_i <- as.matrix(Matrix::solve(facs[[i]], zb))
-            e <- zc - crossprod(H[[i]], zb)
-            prss[i] <- prss[i] + xWx - sum(zb * t_i) - sum(e * solve(Gloc[[i]], e))
-            if (i == center) tc <- t_i
+            e <- CtX - crossprod(H[[i]], zb)
+            c_i <- solve(Gi[[i]], e)
+            # Individual-level penalized RSS: x'x - z'M^-1 z by block elimination.
+            prss[i] <- prss[i] + ag$ss - sum(zb * t_i) - sum(e * c_i)
+            if (i == center) { tc <- t_i; cc <- c_i }
         }
-        CtX <- .spde_mm(C, X, transA = TRUE)
-        cc <- solve(Gind, CtX - crossprod(Hc, zb))
         theta <- tc - Hc %*% cc
-        objective <- objective + ag$ss - sum(CtX * cc) - sum(zb * theta)
         F <- as.matrix(B %*% theta)
         if (k) {
             A <- t(cc[-1L, , drop = FALSE])
@@ -156,9 +152,20 @@ print.svgpc_joint_model <- function(x, ...) {
         }
         total <- total + ncol(X)
     }
-    df <- n - q
-    reml <- df * log(prss / (total * df)) + logdetS + logdetG - m * log(lambdas) - model$logdetQ
-    list(reml = reml, prss = prss, objective = objective, Uacc = Uacc, AtA = AtA,
+    # One objective for U and lambda: individual-level REML with C = [1, U] as the fixed design,
+    # sigma^2 profiled, divided by p. -log|C'C| makes it invariant to U -> U T + 1 v'.
+    df <- N - q
+    logdetCtC <- as.numeric(determinant(CtC, logarithm = TRUE)$modulus)
+    reml <- df * log(prss / (total * df)) + logdetS + logdetG - m * log(lambdas) - model$logdetQ - logdetCtC
+    objective <- prss[center]
+    Uprop <- NULL
+    if (k && update_U) {
+        # Stationarity of the REML in U: U A'A = R0 A - (L/df) [(C - Z B H) G^-1 - C (C'C)^-1]_U.
+        Pc <- C - (as.matrix(B %*% Hc))[s, , drop = FALSE]
+        corr <- (objective / df) * (Pc %*% solve(Gind) - C %*% solve(CtC))[, -1L, drop = FALSE]
+        Uprop <- (Uacc - corr) %*% solve(AtA)
+    }
+    list(reml = reml, prss = prss, objective = objective, Uacc = Uacc, Uprop = Uprop, AtA = AtA,
          aU = aU, aV = aV, aP = aP, p = total, fac0 = fac0,
          concurvity = if (k) kappa(Gind) else 1)
 }
@@ -178,7 +185,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U = NULL, lambda = NULL,
-                            max_iter = 20L, tol = 1e-5, init_scans = 2L, v_scans = 3L,
+                            max_iter = 30L, tol = 1e-4, init_scans = 2L, v_scans = 3L,
                             block_size = NULL, threads = 0L, seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
     start_time <- proc.time()[[3L]]
@@ -217,8 +224,9 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                                     stats::median(Matrix::diag(model$Q))) else log(lambda)
     delta <- if (is.null(lambda)) 8 else 1
     YV <- qr.Q(qr(matrix(stats::rnorm(model$n * ell(r)), model$n, ell(r))))
-    trace <- list(); fac0 <- NULL; last <- NA_real_; converged <- FALSE
+    trace <- list(); fac0 <- NULL; converged <- FALSE
     iter <- 0L; it_init <- 0L
+    U_acc <- NULL; Uprop <- NULL; V_acc <- Inf; step <- 1; omega <- 1
     repeat {
         iter <- iter + 1L
         t0 <- proc.time()[[3L]]
@@ -229,45 +237,62 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
                            YU = if (phase_init) YU else NULL, YV = YV, fac0 = fac0,
                            threads = as.integer(threads))
         fac0 <- res$fac0
-        # lambda: grid minimum, then parabola through its neighbours.
-        j <- which.min(res$reml); eta_old <- eta
-        if (j > 1L && j < length(lams)) {
-            h <- offsets[j + 1L] - offsets[j]
-            f <- res$reml[(j - 1L):(j + 1L)]
-            den <- f[3] - 2 * f[2] + f[1]
-            step <- if (den > 0) -h * (f[3] - f[1]) / (2 * den) else 0
-            eta <- eta + offsets[j] + max(-h, min(h, step))
-            delta <- max(0.05, min(1, abs(eta - eta_old) * 2, delta / 2))
-        } else {
-            eta <- eta + offsets[j]
-            delta <- max(1, delta)
+        V_now <- res$reml[ic]
+        status <- if (phase_init) "init" else "accepted"
+        if (!phase_init && ncol(U) && V_now > V_acc + 1e-10 * abs(V_acc)) {
+            # The U step increased the REML: backtrack towards the last accepted U.
+            status <- "rejected"
+            step <- if (step > 1) 1 else step / 2
+            omega <- 1
+            if (step < 1 / 64) { U <- U_acc; converged <- TRUE; status <- "stalled"; }
+            else U <- .orth_center(U_acc + step * (Uprop - U_acc))
         }
-        YV <- qr.Q(qr(res$aV$Y))
         change <- NA_real_
-        if (phase_init) {
-            it_init <- it_init + 1L
-            if (it_init >= init_scans && (abs(eta - eta_old) < 0.05 || it_init >= init_scans + 4L)) {
-                U <- .orth_center(.ritz(YU, res$aU, k)$vectors)
-                phase_init <- FALSE
-            } else YU <- qr.Q(qr(res$aU$Y))
-        } else if (ncol(U)) {
-            Unew <- .orth_center(res$Uacc %*% solve(res$AtA))
-            sv <- svd(crossprod(U, Unew) / N, nu = 0, nv = 0)$d
-            change <- 1 - min(sv)
-            U <- Unew
+        if (status != "rejected" && status != "stalled") {
+            # lambda: exact minimization of the same REML on the grid, then a parabola step.
+            j <- which.min(res$reml); eta_old <- eta
+            if (j > 1L && j < length(lams)) {
+                h <- offsets[j + 1L] - offsets[j]
+                f <- res$reml[(j - 1L):(j + 1L)]
+                den <- f[3] - 2 * f[2] + f[1]
+                st <- if (den > 0) -h * (f[3] - f[1]) / (2 * den) else 0
+                eta <- eta + offsets[j] + max(-h, min(h, st))
+                delta <- max(0.05, min(1, abs(eta - eta_old) * 2, delta / 2))
+            } else {
+                eta <- eta + offsets[j]
+                delta <- max(1, delta)
+            }
+            YV <- qr.Q(qr(res$aV$Y))
+            if (phase_init) {
+                it_init <- it_init + 1L
+                if (it_init >= init_scans && (abs(eta - eta_old) < 0.05 || it_init >= init_scans + 4L)) {
+                    U <- .orth_center(.ritz(YU, res$aU, k)$vectors)
+                    phase_init <- FALSE
+                } else YU <- qr.Q(qr(res$aU$Y))
+            } else if (ncol(U)) {
+                dV <- V_acc - min(res$reml)
+                U_acc <- U; V_acc <- min(V_now, min(res$reml))
+                # Over-relaxed step along the stationarity update; the next scan's REML
+                # check rejects it and backtracks if it fails to decrease the objective.
+                omega <- if (step >= 1) min(omega * 1.5, 8) else 1
+                step <- omega
+                Uprop <- res$Uprop
+                Unew <- .orth_center(U + step * (Uprop - U))
+                change <- 1 - min(svd(crossprod(U, Unew) / N, nu = 0, nv = 0)$d)
+                U <- Unew
+                if (is.finite(dV) && dV < tol && abs(eta - eta_old) < 0.01) converged <- TRUE
+            } else {
+                dV <- V_acc - min(res$reml); V_acc <- min(res$reml)
+                if (is.finite(dV) && dV < tol && abs(eta - eta_old) < 0.01) converged <- TRUE
+            }
         }
-        rel <- if (is.na(last)) NA_real_ else abs(res$objective - last) / abs(last)
-        trace[[iter]] <- data.frame(iter = iter, phase = if (it_init == iter) "init" else "joint",
-                                    lambda = exp(eta_old), reml = res$reml[ic], objective = res$objective,
-                                    relative_change = rel, U_change = change,
+        trace[[iter]] <- data.frame(iter = iter, step = status, lambda = lams[ic], reml = V_now,
+                                    objective = res$objective, U_change = change,
                                     seconds = proc.time()[[3L]] - t0)
-        if (verbose) message(sprintf("scan %d: lambda=%.4g REML=%.6g rel=%.2e Uchange=%.2e (%.1fs)",
-                                     iter, exp(eta_old), res$reml[ic], rel, change, proc.time()[[3L]] - t0))
-        last <- res$objective
-        if (it_init < iter && !is.na(rel) && rel < tol && abs(eta - eta_old) < 0.01) {
-            converged <- TRUE; break
-        }
-        if (iter >= max_iter) break
+        if (verbose) message(sprintf("scan %d [%s]: lambda=%.4g REML=%.8g Uchange=%.2e (%.1fs)",
+                                     iter, status, lams[ic], V_now, change, proc.time()[[3L]] - t0))
+        if (converged) { if (!is.null(U_acc)) U <- U_acc; break }
+        if (iter >= max_iter) { if (!is.null(U_acc)) U <- U_acc; break }
     }
     # Final scans at fixed U and lambda: V and its U-orthogonal version by subspace iteration.
     lam <- exp(eta)

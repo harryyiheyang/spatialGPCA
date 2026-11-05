@@ -25,13 +25,27 @@ location sums, and for every SNP solves the individual-level normal equations
 by block elimination with one sparse Cholesky of `S = B'WB + lambda Q`:
 `t = S^-1 B'W xbar`, `c = G^-1 (C'x - H'B'W xbar)`, `theta = t - H c`, with
 `C = [1, U]`, `H = S^-1 B'W Cbar` and `G = C'C - Cbar'WB H`. The same scan
-accumulates the closed-form U step `(X - 1 mu' - Z B Theta) A (A'A)^-1`.
+accumulates `(X - 1 mu' - Z B Theta) A` for the U step.
 
-Lambda uses the location-level pooled REML given U,
-`(n - k - 1) log sigma2(lambda) + log|S| + log|G_loc| - m log lambda - log|Q|`,
-evaluated exactly in the same scan at a small grid of lambda values (one extra
-sparse solve per grid point; the symbolic factorization is reused). The grid
-is recentred and narrowed every scan by a parabola step.
+**One objective.** U and lambda minimize the same criterion, the individual-level
+REML with `C = [1, U]` as the fixed design and sigma^2 profiled (divided by p):
+
+```
+V(U, lambda) = (N - q) log(L / (p (N - q))) + log|S| + log|G| - m log lambda - log|Q| - log|C'C|
+```
+
+with `L = sum_j PRSS_j` the individual-level penalized residual sum of squares,
+`G = C'C - C'ZB S^-1 B'Z'C = C' Sigma^-1 C`. `-log|C'C|` makes V invariant to
+`U -> U T + 1 v'`. Every term comes from the sparse Cholesky and the scan; the
+tests check V against the dense formula and its U-gradient by finite differences.
+
+Each scan evaluates V exactly at a small lambda grid (one extra sparse solve per
+grid point, symbolic factorization reused): the lambda step is exact 1-D
+minimization of V. The U step solves the stationarity equation of V in U,
+`U A'A = R0 A - (L/(N-q)) [(C - ZBH) G^-1 - C (C'C)^-1]_U`, with over-relaxation;
+the next scan's V rejects and backtracks any step that does not decrease V, so
+V decreases monotonically over accepted steps. There is no second criterion:
+no location-level REML, no alternation between different objectives.
 
 Initialization is spatial first: scans with intercept only estimate lambda and
 run subspace iteration on `X - 1 mu' - Z B Theta`, whose top k Ritz vectors

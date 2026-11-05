@@ -21,27 +21,55 @@ model <- svgpc_joint_prepare(mesh, table, kappa)
 s <- model$location; w <- model$counts; B <- as.matrix(model$B); Q <- as.matrix(model$Q)
 # Simulated standardized genotypes: smooth field + two nonspatial factors + noise.
 Lq <- chol(Q + diag(1e-8, nrow(Q)))
-Theta <- backsolve(Lq, matrix(rnorm(nrow(Q) * p), nrow(Q))) * 3
+Theta <- backsolve(Lq, matrix(rnorm(nrow(Q) * p), nrow(Q)))
+Theta <- Theta / sd(as.vector(B %*% Theta)) * .6
 Utrue <- cbind(rnorm(N), sample(c(-1, 1), N, TRUE))
 X <- (B %*% Theta)[s, ] + Utrue %*% matrix(rnorm(2 * p, sd = .5), 2) + matrix(rnorm(n * p, sd = .3), n)[s, ] + matrix(rnorm(N * p), N)
 X <- scale(X, scale = FALSE)
 reader <- function(a, b) X[, a:b, drop = FALSE]
 sc <- spatialGPCA:::.joint_scan
 
-# 1. U constant within locations reduces to the existing profile model.
-Ubar <- matrix(rnorm(n * k), n); Uc <- Ubar[s, ]
+# 1. The scan's REML equals the dense individual-level REML (C = [1, U] fixed, sigma^2 profiled),
+#    and U constant within locations reproduces the existing profile model's coefficients.
 lams <- c(.3, 3, 30)
-res <- sc(model, reader, p, 64L, Uc, lams, 2L)
+ZB <- B[s, ]
+dense_reml <- function(U, lam) {
+    C <- cbind(1, U); q <- ncol(C)
+    Sig <- diag(N) + ZB %*% solve(Q, t(ZB)) / lam
+    Si <- solve(Sig); CSC <- crossprod(C, Si %*% C)
+    P <- Si - Si %*% C %*% solve(CSC, t(C) %*% Si)
+    (N - q) * log(sum(X * (P %*% X)) / (p * (N - q))) + as.numeric(determinant(Sig)$modulus) +
+        as.numeric(determinant(CSC)$modulus) - as.numeric(determinant(crossprod(C))$modulus)
+}
+res <- sc(model, reader, p, 64L, Utrue, lams, 2L)
+stopifnot(max(abs(res$reml - sapply(lams, function(l) dense_reml(Utrue, l)))) < 1e-6)
+# Invariance to U -> U T + 1 v'
+res_t <- sc(model, reader, p, 64L, Utrue %*% matrix(c(2, 1, 0, 3), 2) + 5, lams, 2L)
+stopifnot(max(abs(res$reml - res_t$reml)) < 1e-6)
+Ubar <- matrix(rnorm(n * k), n); Uc <- Ubar[s, ]
 xbar <- rowsum(X, s, reorder = TRUE) / w
 basis <- list(B = model$B, Q = model$Q, mesh = mesh, kappa = kappa, tau = 1)
 old <- svgpc_spde_accumulate_matrix(svgpc_spde_prepare(basis, Ubar, w, "profile"), xbar)
-oo <- sapply(lams, function(l) svgpc_spde_objective(old, l))
-stopifnot(max(abs(diff(res$reml) - diff(oo))) < 1e-6)
 th_old <- svgpc_spde_fitted(old, xbar[, 1:5], lams[2], coefficients = TRUE)
-C <- cbind(1, Uc); M <- rbind(cbind(crossprod(C), crossprod(C, B[s, ])),
-                             cbind(crossprod(B[s, ], C), crossprod(B[s, ]) + lams[2] * Q))
-sol <- solve(M, rbind(crossprod(C, X), crossprod(B[s, ], X)))
+C <- cbind(1, Uc); M <- rbind(cbind(crossprod(C), crossprod(C, ZB)),
+                             cbind(crossprod(ZB, C), crossprod(ZB) + lams[2] * Q))
+sol <- solve(M, rbind(crossprod(C, X), crossprod(ZB, X)))
 stopifnot(max(abs(sol[-(1:(k + 1)), 1:5] - th_old)) < 1e-6 * max(abs(th_old)))
+
+# 1b. The U proposal is a stationary point condition of the REML: finite-difference check of
+#     the gradient at the proposal's defining equation, through the closed form below.
+U0 <- Utrue + matrix(rnorm(N * k, sd = .3), N)
+r0 <- sc(model, reader, p, 64L, U0, 3, 1L)
+grad_fd <- function(U, i, j, h = 1e-5) {
+    Up <- U; Up[i, j] <- Up[i, j] + h; Um <- U; Um[i, j] <- Um[i, j] - h
+    (dense_reml(Up, 3) - dense_reml(Um, 3)) / (2 * h)
+}
+# Analytic gradient: (2 / sigma2_p) (U A'A - R0 A) + 2 [(C - ZBH) G^-1 - C (C'C)^-1]_U, sigma2_p = L/df.
+df <- N - k - 1; sig <- r0$objective / df
+grad_an <- 2 / sig * (U0 %*% r0$AtA - r0$Uacc) + 2 * (r0$Uacc - r0$Uprop %*% r0$AtA) / sig
+for (ij in list(c(1, 1), c(17, 2), c(400, 1))) {
+    stopifnot(abs(grad_fd(U0, ij[1], ij[2]) - grad_an[ij[1], ij[2]]) < 1e-4 * max(1, abs(grad_an[ij[1], ij[2]])))
+}
 
 # 2. U varying within locations: objective equals the dense individual-level minimum.
 res2 <- sc(model, reader, p, 50L, Utrue, lams[2], 1L)
@@ -55,9 +83,11 @@ sol <- solve(M, rhs); A <- t(sol[2:3, ]); R <- X - matrix(1, N, 1) %*% sol[1, , 
 stopifnot(max(abs(res2$Uacc - R %*% A)) < 1e-8 * max(abs(res2$Uacc)))
 
 # 3. Joint fit: monotone objective at fixed lambda, recovers U and finds a finite lambda.
-fit <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, max_iter = 30)
+fit <- svgpc_joint_fit(model, k = 2, r = 3, reader = reader, snps = p, verbose = FALSE, max_iter = 60)
 tr <- fit$trace
 stopifnot(all(is.finite(tr$reml)), fit$lambda > 0, is.finite(fit$lambda))
+acc <- tr$reml[tr$step == "accepted"]
+stopifnot(all(diff(acc) <= 1e-8 * abs(acc[-1])))
 cc <- cancor(fit$U, Utrue)$cor
 stopifnot(min(cc) > .9)
 Vi <- fit$V[s, ]
