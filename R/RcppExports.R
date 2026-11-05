@@ -41,6 +41,10 @@ cpp_joint_threads <- function() {
     .Call(`_spatialGPCA_cpp_joint_threads`)
 }
 
+cpp_joint_aggregate <- function(X, location, n, threads) {
+    .Call(`_spatialGPCA_cpp_joint_aggregate`, X, location, n, threads)
+}
+
 cpp_cluster <- function(xy, m, seed) {
     .Call(`_spatialGPCA_cpp_cluster`, xy, m, seed)
 }

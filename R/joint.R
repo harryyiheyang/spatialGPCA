@@ -79,7 +79,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 # One pass over all SNPs at fixed U and a small lambda grid.
 .joint_scan <- function(model, reader, p, block, U, lambdas, center,
-                        update_U = TRUE, YU = NULL, YV = NULL, YP = NULL, fac0 = NULL) {
+                        update_U = TRUE, YU = NULL, YV = NULL, YP = NULL, fac0 = NULL, threads = 0L) {
     s <- model$location; w <- model$counts; B <- model$B; N <- model$N; n <- model$n; m <- model$m
     C <- cbind(1, U)
     q <- ncol(C); k <- q - 1L
@@ -113,7 +113,8 @@ print.svgpc_joint_model <- function(x, ...) {
         en <- min(p, st + block - 1L)
         X <- reader(st, en)
         if (nrow(X) != N || ncol(X) != en - st + 1L) stop("Reader returned a block of the wrong size")
-        Xs <- rowsum(X, s, reorder = TRUE)
+        ag <- cpp_joint_aggregate(X, s, n, threads)
+        Xs <- ag$sums
         zb <- as.matrix(Matrix::crossprod(B, Xs))
         zc <- crossprod(Cbar, Xs)
         xWx <- sum(Xs * Xs / w)
@@ -126,7 +127,7 @@ print.svgpc_joint_model <- function(x, ...) {
         CtX <- .spde_mm(C, X, transA = TRUE)
         cc <- solve(Gind, CtX - crossprod(Hc, zb))
         theta <- tc - Hc %*% cc
-        objective <- objective + sum(X * X) - sum(CtX * cc) - sum(zb * theta)
+        objective <- objective + ag$ss - sum(CtX * cc) - sum(zb * theta)
         F <- as.matrix(B %*% theta)
         if (k) {
             A <- t(cc[-1L, , drop = FALSE])
@@ -177,7 +178,7 @@ print.svgpc_joint_model <- function(x, ...) {
 
 svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader = NULL, snps = NULL,
                             init = c("spatial", "table"), U = NULL, lambda = NULL,
-                            max_iter = 20L, tol = 1e-6, init_scans = 2L, v_scans = 3L,
+                            max_iter = 20L, tol = 1e-5, init_scans = 2L, v_scans = 3L,
                             block_size = NULL, threads = 0L, seed = 1L, verbose = TRUE) {
     if (!inherits(model, "svgpc_joint_model")) stop("Use svgpc_joint_prepare() first")
     start_time <- proc.time()[[3L]]
@@ -225,7 +226,8 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         lams <- exp(eta + offsets); ic <- which(offsets == 0)
         res <- .joint_scan(model, reader, p, block_size, U, lams, ic,
                            update_U = !phase_init && ncol(U) > 0L,
-                           YU = if (phase_init) YU else NULL, YV = YV, fac0 = fac0)
+                           YU = if (phase_init) YU else NULL, YV = YV, fac0 = fac0,
+                           threads = as.integer(threads))
         fac0 <- res$fac0
         # lambda: grid minimum, then parabola through its neighbours.
         j <- which.min(res$reml); eta_old <- eta
@@ -262,8 +264,9 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
         if (verbose) message(sprintf("scan %d: lambda=%.4g REML=%.6g rel=%.2e Uchange=%.2e (%.1fs)",
                                      iter, exp(eta_old), res$reml[ic], rel, change, proc.time()[[3L]] - t0))
         last <- res$objective
-        if (it_init < iter && !is.na(rel) && rel < tol && abs(eta - eta_old) < 0.01 &&
-            (is.na(change) || change < 1e-4)) { converged <- TRUE; break }
+        if (it_init < iter && !is.na(rel) && rel < tol && abs(eta - eta_old) < 0.01) {
+            converged <- TRUE; break
+        }
         if (iter >= max_iter) break
     }
     # Final scans at fixed U and lambda: V and its U-orthogonal version by subspace iteration.
@@ -274,7 +277,7 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     for (v in seq_len(v_scans)) {
         t0 <- proc.time()[[3L]]
         res <- .joint_scan(model, reader, p, block_size, U, lam, 1L, update_U = FALSE,
-                           YV = YV, YP = YP, fac0 = fac0)
+                           YV = YV, YP = YP, fac0 = fac0, threads = as.integer(threads))
         if (verbose) message(sprintf("V scan %d: REML=%.6g (%.1fs)", v, res$reml, proc.time()[[3L]] - t0))
         if (v < v_scans) { YV <- qr.Q(qr(res$aV$Y)); YP <- qr.Q(qr(res$aP$Y)) }
     }

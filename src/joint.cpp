@@ -55,3 +55,29 @@ int cpp_joint_threads() {
   return 1;
 #endif
 }
+
+// Location sums Z'X and total sum of squares of an N x b block in one pass.
+// [[Rcpp::export]]
+Rcpp::List cpp_joint_aggregate(const arma::mat &X, Rcpp::IntegerVector location, int n, int threads) {
+  const int N = X.n_rows, b = X.n_cols;
+  if (location.size() != N) Rcpp::stop("Location map does not match the block");
+  for (int i = 0; i < N; ++i)
+    if (location[i] < 1 || location[i] > n) Rcpp::stop("Invalid location index");
+  arma::mat S(n, b, arma::fill::zeros);
+  arma::vec ss(b, arma::fill::zeros);
+  const int *loc = location.begin();
+#ifdef _OPENMP
+  if (threads < 1) threads = omp_get_max_threads();
+#pragma omp parallel for num_threads(threads) schedule(static)
+#endif
+  for (int j = 0; j < b; ++j) {
+    const double *x = X.colptr(j);
+    double *s = S.colptr(j), acc = 0;
+    for (int i = 0; i < N; ++i) {
+      s[loc[i] - 1] += x[i];
+      acc += x[i] * x[i];
+    }
+    ss[j] = acc;
+  }
+  return Rcpp::List::create(Rcpp::_["sums"] = S, Rcpp::_["ss"] = arma::accu(ss));
+}
