@@ -244,7 +244,8 @@ svgpc_joint_fit <- function(model, k = 10L, r = 10L, frequencies = NULL, reader 
     bedscan <- NULL
     if (is.null(reader)) {
         bed <- .joint_bed(model$spatial, frequencies)
-        snps <- bed$snps
+        # snps limits the fit to the first snps variants of the BED (quick runs).
+        snps <- if (is.null(snps)) bed$snps else min(bed$snps, .positive_integer(snps, "snps"))
         reader <- function(st, en) cpp_joint_bed_block(bed$path, bed$file_samples, bed$rows,
                                                        st - 1L, en - st + 1L, bed$af, as.integer(threads))
         if (kernel == "fused") bedscan <- function(st, en, Yt, q, RtT)

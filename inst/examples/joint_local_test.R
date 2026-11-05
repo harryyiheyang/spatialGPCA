@@ -1,5 +1,5 @@
 # Local test of the joint U + SPDE fit on a real PLINK BED.
-# Usage: Rscript joint_local_test.R <bed prefix> [individual table TSV] [k] [max SNPs]
+# Usage: Rscript joint_local_test.R <bed prefix> [individual table TSV] [k] [max SNPs] [output prefix]
 # The table needs FID, IID, Lat, Lon as its first four columns. Without a table,
 # UK coordinates are simulated at 2,000 pseudo-locations: this checks speed and
 # memory only, not the spatial result. Frequencies are read from <prefix>.afreq
@@ -30,19 +30,14 @@ scale <- svgpc_spde_scale(distance = 100)
 t0 <- proc.time()[[3]]
 model <- svgpc_joint_prepare(mesh, table, kappa = scale$kappa, bed = prefix)
 print(model)
-reader <- NULL; snps <- NULL
-if (length(args) >= 4) {
-    # Limit the number of SNPs for a quick first run.
-    snps <- as.integer(args[4])
-    bed <- spatialGPCA:::.joint_bed(model$spatial, NULL)
-    reader <- function(st, en) spatialGPCA:::cpp_joint_bed_block(bed$path, bed$file_samples, bed$rows,
-                                                                st - 1L, en - st + 1L, bed$af, 0L)
-}
-fit <- svgpc_joint_fit(model, k = k, r = 10, reader = reader, snps = snps, max_iter = 15)
+# Optional 4th argument: use only the first that many SNPs for a quick run (fused BED kernel either way).
+snps <- if (length(args) >= 4) as.integer(args[4]) else NULL
+fit <- svgpc_joint_fit(model, k = k, r = 10, snps = snps, max_iter = 30)
 print(fit)
 print(fit$trace)
 cat("Prepare + fit seconds:", proc.time()[[3]] - t0, "; threads:", spatialGPCA:::cpp_joint_threads(),
     "; kernel:", fit$kernel, "\n")
-out <- paste0(prefix, "_joint")
+# Optional 5th argument: output prefix (default: the working directory, never the data folder).
+out <- if (length(args) >= 5) args[5] else file.path(getwd(), paste0(basename(prefix), "_joint"))
 write.table(fit$individual, paste0(out, "_individual.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 saveRDS(fit[c("trace", "lambda", "reml", "U_eigenvalues", "V_eigenvalues", "seconds")], paste0(out, "_summary.rds"))
